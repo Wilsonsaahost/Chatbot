@@ -10,7 +10,10 @@ const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 // Crea una instancia de la aplicación Express
 const app = express();
 app.use(bodyParser.json());
-
+// Ruta principal para UptimeRobot y verificaciones manuales
+app.get('/', (req, res) => {
+  res.status(200).send('¡El bot de WhatsApp está activo y escuchando!');
+});
 // --- 1. CONFIGURACIÓN DEL WEBHOOK PARA RECIBIR MENSAJES ---
 app.get('/webhook', (req, res) => {
   // Verificación del Webhook con Meta
@@ -85,4 +88,5 @@ async function sendMessage(to, text) {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`Servidor escuchando en el puerto ${PORT}`);
+
 });
