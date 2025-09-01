@@ -90,17 +90,14 @@ app.post('/webhook', async (req, res) => {
     const normalizedFrom = normalizePhoneNumber(from);
 
     try {
-      // --- LÓGICA DE BÚSQUEDA MODIFICADA ---
-      // Buscamos la recomendación más reciente del usuario, sin importar la fecha.
       const latestRecommendation = await db.collection('users').findOne(
-        { whatsapp_number: normalizedFrom }, // Buscamos solo por el número de teléfono
-        { sort: { createdAt: -1 } }         // Ordenamos por fecha para obtener la última
+        { whatsapp_number: normalizedFrom },
+        { sort: { createdAt: -1 } }
       );
 
       // CASO 1: El usuario envía un mensaje de texto "hola"
       if (message.type === 'text' && message.text.body.toLowerCase() === 'hola') {
         if (latestRecommendation) {
-          // Si el usuario tiene CUALQUIER recomendación guardada, le mostramos el botón.
           const messagePayload = {
             messaging_product: "whatsapp",
             to: from,
@@ -111,14 +108,16 @@ app.post('/webhook', async (req, res) => {
               action: {
                 buttons: [{
                   type: "reply",
-                  reply: { id: "show_recommendation", title: "Ver última recomendación" }
+                  reply: { 
+                    id: "show_recommendation", 
+                    title: "Ver recomendación" // <-- CAMBIO REALIZADO AQUÍ
+                  }
                 }]
               }
             }
           };
           await sendWhatsAppMessage(messagePayload);
         } else {
-          // Si no tiene ninguna recomendación, le enviamos un saludo normal.
           const messagePayload = {
             messaging_product: "whatsapp",
             to: from,
@@ -131,7 +130,6 @@ app.post('/webhook', async (req, res) => {
       // CASO 2: El usuario presiona un botón
       else if (message.type === 'interactive' && message.interactive.type === 'button_reply') {
         if (message.interactive.button_reply.id === 'show_recommendation') {
-          // Volvemos a buscar la recomendación más reciente para asegurarnos de que la tenemos
           if (latestRecommendation) {
             const messagePayload = {
               messaging_product: "whatsapp",
