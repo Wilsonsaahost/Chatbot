@@ -69,7 +69,7 @@ app.post('/save-recommendation', async (req, res) => {
             whatsapp_number: normalizePhoneNumber(whatsapp_number),
             business_name,
             recommendation,
-            createdAt: new Date()
+            createdAt: new Date() // Aseguramos que se guarde la fecha y hora actual
         };
         await collection.insertOne(document);
         console.log(`✅ Recomendación guardada para ${business_name}`);
@@ -90,10 +90,14 @@ app.post('/webhook', async (req, res) => {
     const normalizedFrom = normalizePhoneNumber(from);
 
     try {
-      const latestRecommendation = await db.collection('users').findOne(
-        { whatsapp_number: normalizedFrom },
-        { sort: { createdAt: -1 } }
-      );
+      // --- LÓGICA DE BÚSQUEDA CORREGIDA Y MÁS ROBUSTA ---
+      const cursor = db.collection('users').find({ whatsapp_number: normalizedFrom }).sort({ createdAt: -1 }).limit(1);
+      const latestRecommendation = await cursor.next();
+
+      // Log de depuración para ver qué registro se encontró
+      if (latestRecommendation) {
+        console.log(`ℹ️ Registro encontrado para ${normalizedFrom} con fecha: ${latestRecommendation.createdAt}`);
+      }
 
       // CASO 1: El usuario envía un mensaje de texto "hola"
       if (message.type === 'text' && message.text.body.toLowerCase() === 'hola') {
@@ -108,10 +112,7 @@ app.post('/webhook', async (req, res) => {
               action: {
                 buttons: [{
                   type: "reply",
-                  reply: { 
-                    id: "show_recommendation", 
-                    title: "Ver recomendación" // <-- CAMBIO REALIZADO AQUÍ
-                  }
+                  reply: { id: "show_recommendation", title: "Ver recomendación" }
                 }]
               }
             }
