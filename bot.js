@@ -53,21 +53,13 @@ app.post('/save-recommendation', async (req, res) => {
     if (providedApiKey !== API_SECRET_KEY) {
         return res.status(401).send('Acceso no autorizado');
     }
-
     const { whatsapp_number, business_name, recommendation } = req.body;
     if (!whatsapp_number || !business_name || !recommendation) {
         return res.status(400).send('Faltan datos en la solicitud');
     }
-
     try {
         const collection = db.collection('users');
-        const document = {
-            whatsapp_number,
-            business_name,
-            recommendation,
-            createdAt: new Date()
-            // El campo 'welcome_message_sent' ya no es necesario
-        };
+        const document = { whatsapp_number, business_name, recommendation, createdAt: new Date() };
         await collection.insertOne(document);
         console.log(`✅ Recomendación guardada para ${business_name}`);
         res.status(200).send('Recomendación guardada exitosamente');
@@ -82,28 +74,76 @@ app.post('/webhook', async (req, res) => {
   const body = req.body;
   
   if (body.object && body.entry?.[0]?.changes?.[0]?.value?.messages?.[0]) {
-    const from = body.entry[0].changes[0].value.messages[0].from;
-    const msg_body = body.entry[0].changes[0].value.messages[0].text.body;
+    const message = body.entry[0].changes[0].value.messages[0];
+    const from = message.from;
 
     try {
-      // --- LÓGICA MODIFICADA ---
-      const user = await db.collection('users').findOne({ whatsapp_number: from });
+      // --- LÓGICA COMPLETAMENTE NUEVA ---
 
-      // Si encontramos al usuario en la base de datos...
-      if (user) {
-        // Le enviamos su recomendación guardada, sin importar lo que escriba.
-        const introMessage = `Hola ${user.business_name}, aquí tienes la última recomendación que generamos para ti:`;
-        await sendMessage(from, introMessage);
-        await sendMessage(from, user.recommendation);
+      // CASO 1: El usuario envía un mensaje de texto
+      if (message.type === 'text' && message.text.body.toLowerCase() === 'hola') {
+        const user = await db.collection('users').findOne({ whatsapp_number: from });
 
-      } else {
-        // Si el usuario es nuevo (no está en la DB), aplicamos la lógica general.
-        if (msg_body.toLowerCase() === 'hola') {
-            await sendMessage(from, 'Bienvenido a Hostaddres, ¿en qué puedo ayudarte?');
+        if (user) {
+          // Si el usuario existe, le enviamos un saludo con un botón.
+          const messagePayload = {
+            messaging_product: "whatsapp",
+            to: from,
+            type: "interactive",
+            interactive: {
+              type: "button",
+              body: {
+                text: `¡Hola ${user.business_name}! Bienvenido de nuevo a Hostaddres.`
+              },
+              action: {
+                buttons: [
+                  {
+                    type: "reply",
+                    reply: {
+                      id: "show_recommendation",
+                      title: "Ver mi recomendación"
+                    }
+                  }
+                ]
+              }
+            }
+          };
+          await sendWhatsAppMessage(messagePayload);
         } else {
-            await sendMessage(from, 'No he entendido tu mensaje. Si necesitas ayuda, escribe "hola".');
+          // Si el usuario no existe, le enviamos un saludo normal.
+          const messagePayload = {
+            messaging_product: "whatsapp",
+            to: from,
+            text: { body: "Bienvenido a Hostaddres, ¿en qué puedo ayudarte?" }
+          };
+          await sendWhatsAppMessage(messagePayload);
         }
       }
+      // CASO 2: El usuario presiona un botón
+      else if (message.type === 'interactive' && message.interactive.type === 'button_reply') {
+        if (message.interactive.button_reply.id === 'show_recommendation') {
+          const user = await db.collection('users').findOne({ whatsapp_number: from });
+          if (user) {
+            // Si presiona el botón, buscamos su recomendación y se la enviamos.
+            const messagePayload = {
+              messaging_product: "whatsapp",
+              to: from,
+              text: { body: user.recommendation }
+            };
+            await sendWhatsAppMessage(messagePayload);
+          }
+        }
+      }
+      // (Opcional) Si el usuario escribe algo diferente a "hola"
+      else if (message.type === 'text') {
+        const messagePayload = {
+          messaging_product: "whatsapp",
+          to: from,
+          text: { body: 'Para comenzar, por favor escribe "hola".' }
+        };
+        await sendWhatsAppMessage(messagePayload);
+      }
+      
     } catch (error) {
       console.error('🔴 Error procesando el mensaje:', error);
     }
@@ -114,13 +154,14 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-// --- FUNCIÓN PARA ENVIAR MENSAJES ---
-async function sendMessage(to, text) {
+// --- FUNCIÓN MODIFICADA PARA ENVIAR CUALQUIER TIPO DE MENSAJE ---
+async function sendWhatsAppMessage(messagePayload) {
+  const to = messagePayload.to;
   try {
     await axios.post(
       `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`,
-      { messaging_product: 'whatsapp', to: to, text: { body: text } },
-      { headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}` } }
+      messagePayload, // Enviamos el cuerpo del mensaje completo
+      { headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}`, 'Content-Type': 'application/json' } }
     );
     console.log(`✅ Mensaje enviado a ${to}`);
   } catch (error) {
