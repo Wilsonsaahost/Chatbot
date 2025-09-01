@@ -15,30 +15,36 @@ const API_SECRET_KEY = process.env.API_SECRET_KEY;
 const app = express();
 app.use(bodyParser.json());
 
-let db; // Variable para mantener la conexión a la base de datos
+let db;
 
-// Conectamos a MongoDB al iniciar el bot
 MongoClient.connect(DATABASE_URL)
   .then(client => {
     console.log('✅ Conectado exitosamente a la base de datos');
-    db = client.db('Hostaddres'); // Nombre de tu base de datos
+    db = client.db('Hostaddres');
   })
   .catch(error => console.error('🔴 Error al conectar a la base de datos:', error));
 
+// --- FUNCIÓN DE NORMALIZACIÓN DE NÚMEROS ---
+function normalizePhoneNumber(phoneNumber) {
+  const digitsOnly = phoneNumber.replace(/\D/g, '');
+  if (digitsOnly.startsWith('57') && digitsOnly.length > 10) {
+    return digitsOnly.substring(2);
+  }
+  return digitsOnly;
+}
 
 // --- RUTAS DEL SERVIDOR ---
 
-// 1. Ruta principal para mantener el bot activo con UptimeRobot
+// 1. Ruta principal para UptimeRobot
 app.get('/', (req, res) => {
   res.status(200).send('¡El bot de WhatsApp está activo y escuchando!');
 });
 
-// 2. Ruta para la verificación del Webhook con Meta (Facebook)
+// 2. Ruta para la verificación del Webhook con Meta
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
-
   if (mode && token === VERIFY_TOKEN && mode === 'subscribe') {
     console.log('WEBHOOK_VERIFIED');
     res.status(200).send(challenge);
@@ -59,7 +65,12 @@ app.post('/save-recommendation', async (req, res) => {
     }
     try {
         const collection = db.collection('users');
-        const document = { whatsapp_number, business_name, recommendation, createdAt: new Date() };
+        const document = {
+            whatsapp_number: normalizePhoneNumber(whatsapp_number),
+            business_name,
+            recommendation,
+            createdAt: new Date()
+        };
         await collection.insertOne(document);
         console.log(`✅ Recomendación guardada para ${business_name}`);
         res.status(200).send('Recomendación guardada exitosamente');
@@ -76,14 +87,13 @@ app.post('/webhook', async (req, res) => {
   if (body.object && body.entry?.[0]?.changes?.[0]?.value?.messages?.[0]) {
     const message = body.entry[0].changes[0].value.messages[0];
     const from = message.from;
+    const normalizedFrom = normalizePhoneNumber(from);
 
     try {
-      // --- LÓGICA COMPLETAMENTE NUEVA ---
+      const user = await db.collection('users').findOne({ whatsapp_number: normalizedFrom });
 
-      // CASO 1: El usuario envía un mensaje de texto
+      // CASO 1: El usuario envía un mensaje de texto "hola"
       if (message.type === 'text' && message.text.body.toLowerCase() === 'hola') {
-        const user = await db.collection('users').findOne({ whatsapp_number: from });
-
         if (user) {
           // Si el usuario existe, le enviamos un saludo con un botón.
           const messagePayload = {
@@ -92,19 +102,12 @@ app.post('/webhook', async (req, res) => {
             type: "interactive",
             interactive: {
               type: "button",
-              body: {
-                text: `¡Hola ${user.business_name}! Bienvenido de nuevo a Hostaddres.`
-              },
+              body: { text: `¡Hola ${user.business_name}! Bienvenido de nuevo a Hostaddres.` },
               action: {
-                buttons: [
-                  {
-                    type: "reply",
-                    reply: {
-                      id: "show_recommendation",
-                      title: "Ver mi recomendación"
-                    }
-                  }
-                ]
+                buttons: [{
+                  type: "reply",
+                  reply: { id: "show_recommendation", title: "Ver mi recomendación" }
+                }]
               }
             }
           };
@@ -114,6 +117,7 @@ app.post('/webhook', async (req, res) => {
           const messagePayload = {
             messaging_product: "whatsapp",
             to: from,
+            type: "text",
             text: { body: "Bienvenido a Hostaddres, ¿en qué puedo ayudarte?" }
           };
           await sendWhatsAppMessage(messagePayload);
@@ -122,23 +126,24 @@ app.post('/webhook', async (req, res) => {
       // CASO 2: El usuario presiona un botón
       else if (message.type === 'interactive' && message.interactive.type === 'button_reply') {
         if (message.interactive.button_reply.id === 'show_recommendation') {
-          const user = await db.collection('users').findOne({ whatsapp_number: from });
           if (user) {
             // Si presiona el botón, buscamos su recomendación y se la enviamos.
             const messagePayload = {
               messaging_product: "whatsapp",
               to: from,
+              type: "text",
               text: { body: user.recommendation }
             };
             await sendWhatsAppMessage(messagePayload);
           }
         }
       }
-      // (Opcional) Si el usuario escribe algo diferente a "hola"
+      // CASO 3: El usuario escribe algo diferente a "hola"
       else if (message.type === 'text') {
         const messagePayload = {
           messaging_product: "whatsapp",
           to: from,
+          type: "text",
           text: { body: 'Para comenzar, por favor escribe "hola".' }
         };
         await sendWhatsAppMessage(messagePayload);
@@ -154,18 +159,18 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-// --- FUNCIÓN MODIFICADA PARA ENVIAR CUALQUIER TIPO DE MENSAJE ---
+// --- FUNCIÓN DE ENVÍO DE MENSAJES ---
 async function sendWhatsAppMessage(messagePayload) {
   const to = messagePayload.to;
   try {
     await axios.post(
       `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`,
-      messagePayload, // Enviamos el cuerpo del mensaje completo
+      messagePayload,
       { headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}`, 'Content-Type': 'application/json' } }
     );
     console.log(`✅ Mensaje enviado a ${to}`);
   } catch (error) {
-    console.error('🔴 Error enviando mensaje:', error.response ? error.response.data : error.message);
+    console.error('🔴 Error enviando mensaje:', error.response ? error.response.data.error : error.message);
   }
 }
 
