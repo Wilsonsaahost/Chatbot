@@ -21,12 +21,7 @@ let db; // Variable para mantener la conexión a la base de datos
 MongoClient.connect(DATABASE_URL)
   .then(client => {
     console.log('✅ Conectado exitosamente a la base de datos');
-    
-    // #############################################################
-    // ## Se ha configurado el nombre de tu base de datos.         ##
-    // #############################################################
-    db = client.db('Hostaddres'); // <-- LÍNEA ACTUALIZADA
-    
+    db = client.db('Hostaddres'); // Nombre de tu base de datos
   })
   .catch(error => console.error('🔴 Error al conectar a la base de datos:', error));
 
@@ -70,8 +65,8 @@ app.post('/save-recommendation', async (req, res) => {
             whatsapp_number,
             business_name,
             recommendation,
-            welcome_message_sent: false,
             createdAt: new Date()
+            // El campo 'welcome_message_sent' ya no es necesario
         };
         await collection.insertOne(document);
         console.log(`✅ Recomendación guardada para ${business_name}`);
@@ -91,18 +86,18 @@ app.post('/webhook', async (req, res) => {
     const msg_body = body.entry[0].changes[0].value.messages[0].text.body;
 
     try {
+      // --- LÓGICA MODIFICADA ---
       const user = await db.collection('users').findOne({ whatsapp_number: from });
 
-      if (user && !user.welcome_message_sent) {
-        const welcomeMessage = `Hola ${user.business_name}, qué bueno tenerte de nuevo. Te envío una copia de la recomendación que generaste en nuestro sitio:`;
-        await sendMessage(from, welcomeMessage);
+      // Si encontramos al usuario en la base de datos...
+      if (user) {
+        // Le enviamos su recomendación guardada, sin importar lo que escriba.
+        const introMessage = `Hola ${user.business_name}, aquí tienes la última recomendación que generamos para ti:`;
+        await sendMessage(from, introMessage);
         await sendMessage(from, user.recommendation);
 
-        await db.collection('users').updateOne(
-          { _id: user._id },
-          { $set: { welcome_message_sent: true } }
-        );
       } else {
+        // Si el usuario es nuevo (no está en la DB), aplicamos la lógica general.
         if (msg_body.toLowerCase() === 'hola') {
             await sendMessage(from, 'Bienvenido a Hostaddres, ¿en qué puedo ayudarte?');
         } else {
