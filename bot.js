@@ -46,7 +46,40 @@ app.get('/webhook', (req, res) => {
     res.sendStatus(403);
   }
 });
+// --- RUTA SECRETA PARA RECIBIR DATOS DESDE WORDPRESS ---
+app.post('/save-recommendation', async (req, res) => {
+    // 1. Verificación de seguridad
+    const providedApiKey = req.header('x-api-key');
+    if (providedApiKey !== process.env.API_SECRET_KEY) {
+        return res.status(401).send('Acceso no autorizado');
+    }
 
+    // 2. Obtención de los datos enviados por WordPress
+    const { whatsapp_number, business_name, recommendation } = req.body;
+
+    // 3. Validación de que los datos llegaron
+    if (!whatsapp_number || !business_name || !recommendation) {
+        return res.status(400).send('Faltan datos en la solicitud');
+    }
+
+    // 4. Guardado en la base de datos
+    try {
+        const collection = db.collection('users');
+        const document = {
+            whatsapp_number,
+            business_name,
+            recommendation,
+            welcome_message_sent: false,
+            createdAt: new Date()
+        };
+        await collection.insertOne(document);
+        console.log(`✅ Recomendación guardada para ${business_name}`);
+        res.status(200).send('Recomendación guardada exitosamente');
+    } catch (error) {
+        console.error('🔴 Error al guardar la recomendación desde WordPress:', error);
+        res.status(500).send('Error interno del servidor');
+    }
+});
 // 3. Ruta principal para recibir los mensajes de WhatsApp
 app.post('/webhook', async (req, res) => { // <-- La función ahora es 'async' para poder esperar a la DB
   const body = req.body;
@@ -118,3 +151,4 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Servidor escuchando en el puerto ${PORT}`);
 });
+
