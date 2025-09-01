@@ -2,13 +2,14 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const axios = require('axios');
-const { MongoClient } = require('mongodb'); // <-- AÑADIDO: Driver para la base de datos
+const { MongoClient } = require('mongodb');
 
 // --- CONFIGURACIÓN SEGURA DESDE RENDER ---
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
-const DATABASE_URL = process.env.DATABASE_URL; // <-- AÑADIDO: Tu cadena de conexión a MongoDB
+const DATABASE_URL = process.env.DATABASE_URL;
+const API_SECRET_KEY = process.env.API_SECRET_KEY;
 
 // --- INICIALIZACIÓN DE LA APLICACIÓN Y LA BASE DE DATOS ---
 const app = express();
@@ -20,8 +21,12 @@ let db; // Variable para mantener la conexión a la base de datos
 MongoClient.connect(DATABASE_URL)
   .then(client => {
     console.log('✅ Conectado exitosamente a la base de datos');
-    // Reemplaza 'nombre_de_tu_base_de_datos' por el nombre real de tu DB
-    db = client.db('nombre_de_tu_base_de_datos'); 
+    
+    // #############################################################
+    // ## Se ha configurado el nombre de tu base de datos.         ##
+    // #############################################################
+    db = client.db('Hostaddres'); // <-- LÍNEA ACTUALIZADA
+    
   })
   .catch(error => console.error('🔴 Error al conectar a la base de datos:', error));
 
@@ -46,23 +51,19 @@ app.get('/webhook', (req, res) => {
     res.sendStatus(403);
   }
 });
-// --- RUTA SECRETA PARA RECIBIR DATOS DESDE WORDPRESS ---
+
+// 3. Ruta secreta para recibir datos desde WordPress
 app.post('/save-recommendation', async (req, res) => {
-    // 1. Verificación de seguridad
     const providedApiKey = req.header('x-api-key');
-    if (providedApiKey !== process.env.API_SECRET_KEY) {
+    if (providedApiKey !== API_SECRET_KEY) {
         return res.status(401).send('Acceso no autorizado');
     }
 
-    // 2. Obtención de los datos enviados por WordPress
     const { whatsapp_number, business_name, recommendation } = req.body;
-
-    // 3. Validación de que los datos llegaron
     if (!whatsapp_number || !business_name || !recommendation) {
         return res.status(400).send('Faltan datos en la solicitud');
     }
 
-    // 4. Guardado en la base de datos
     try {
         const collection = db.collection('users');
         const document = {
@@ -80,44 +81,31 @@ app.post('/save-recommendation', async (req, res) => {
         res.status(500).send('Error interno del servidor');
     }
 });
-// 3. Ruta principal para recibir los mensajes de WhatsApp
-app.post('/webhook', async (req, res) => { // <-- La función ahora es 'async' para poder esperar a la DB
+
+// 4. Ruta principal para recibir los mensajes de WhatsApp
+app.post('/webhook', async (req, res) => {
   const body = req.body;
   
-  // Verificamos que sea un mensaje válido de WhatsApp
   if (body.object && body.entry?.[0]?.changes?.[0]?.value?.messages?.[0]) {
-    const from = body.entry[0].changes[0].value.messages[0].from; // Número del cliente
-    const msg_body = body.entry[0].changes[0].value.messages[0].text.body; // Texto del mensaje
+    const from = body.entry[0].changes[0].value.messages[0].from;
+    const msg_body = body.entry[0].changes[0].value.messages[0].text.body;
 
     try {
-      // --- LÓGICA INTELIGENTE DEL BOT ---
-
-      // 1. Buscamos al usuario en la base de datos por su número de WhatsApp
-      // Reemplaza 'users' si tu colección se llama de otra forma
       const user = await db.collection('users').findOne({ whatsapp_number: from });
 
-      // 2. Comprobamos si el usuario existe y si NO le hemos enviado el mensaje de bienvenida
       if (user && !user.welcome_message_sent) {
-        
-        // Creamos los mensajes personalizados
         const welcomeMessage = `Hola ${user.business_name}, qué bueno tenerte de nuevo. Te envío una copia de la recomendación que generaste en nuestro sitio:`;
-        
-        // Enviamos el saludo y la recomendación
         await sendMessage(from, welcomeMessage);
         await sendMessage(from, user.recommendation);
 
-        // Actualizamos al usuario en la base de datos para no volver a saludarlo
         await db.collection('users').updateOne(
           { _id: user._id },
           { $set: { welcome_message_sent: true } }
         );
-
       } else {
-        // --- LÓGICA NORMAL (si el usuario no existe o ya fue saludado) ---
         if (msg_body.toLowerCase() === 'hola') {
             await sendMessage(from, 'Bienvenido a Hostaddres, ¿en qué puedo ayudarte?');
         } else {
-            // Aquí puedes añadir más comandos en el futuro
             await sendMessage(from, 'No he entendido tu mensaje. Si necesitas ayuda, escribe "hola".');
         }
       }
@@ -125,12 +113,11 @@ app.post('/webhook', async (req, res) => { // <-- La función ahora es 'async' p
       console.error('🔴 Error procesando el mensaje:', error);
     }
 
-    res.sendStatus(200); // Respondemos a Meta para que sepa que recibimos el mensaje
+    res.sendStatus(200);
   } else {
     res.sendStatus(404);
   }
 });
-
 
 // --- FUNCIÓN PARA ENVIAR MENSAJES ---
 async function sendMessage(to, text) {
@@ -151,4 +138,3 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Servidor escuchando en el puerto ${PORT}`);
 });
-
