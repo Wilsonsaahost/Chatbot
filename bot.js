@@ -90,19 +90,31 @@ app.post('/webhook', async (req, res) => {
     const normalizedFrom = normalizePhoneNumber(from);
 
     try {
-      const user = await db.collection('users').findOne({ whatsapp_number: normalizedFrom });
+      // --- LÓGICA DE BÚSQUEDA MEJORADA ---
+
+      // 1. Buscamos la recomendación más reciente del usuario
+      const today = new Date();
+      today.setHours(0, 0, 0, 0); // Establecemos la hora a las 00:00:00 del día de hoy
+
+      const userRecommendation = await db.collection('users').findOne(
+        {
+          whatsapp_number: normalizedFrom,
+          createdAt: { $gte: today } // Filtramos para que sea solo de hoy
+        },
+        { sort: { createdAt: -1 } } // Ordenamos para obtener la más reciente
+      );
 
       // CASO 1: El usuario envía un mensaje de texto "hola"
       if (message.type === 'text' && message.text.body.toLowerCase() === 'hola') {
-        if (user) {
-          // Si el usuario existe, le enviamos un saludo con un botón.
+        if (userRecommendation) {
+          // Si el usuario tiene una recomendación de HOY, le mostramos el botón.
           const messagePayload = {
             messaging_product: "whatsapp",
             to: from,
             type: "interactive",
             interactive: {
               type: "button",
-              body: { text: `¡Hola ${user.business_name}! Bienvenido de nuevo a Hostaddres.` },
+              body: { text: `¡Hola ${userRecommendation.business_name}! Bienvenido de nuevo. Veo que generaste una recomendación hoy.` },
               action: {
                 buttons: [{
                   type: "reply",
@@ -113,12 +125,12 @@ app.post('/webhook', async (req, res) => {
           };
           await sendWhatsAppMessage(messagePayload);
         } else {
-          // Si el usuario no existe, le enviamos un saludo normal.
+          // Si no tiene recomendación de hoy, le enviamos un saludo normal.
           const messagePayload = {
             messaging_product: "whatsapp",
             to: from,
             type: "text",
-            text: { body: "Bienvenido a Hostaddres, ¿en qué puedo ayudarte?" }
+            text: { body: "Bienvenido a Hostaddres, ¿en qué puedo ayudarte? Si generas una recomendación en nuestro sitio, podrás verla aquí." }
           };
           await sendWhatsAppMessage(messagePayload);
         }
@@ -126,13 +138,13 @@ app.post('/webhook', async (req, res) => {
       // CASO 2: El usuario presiona un botón
       else if (message.type === 'interactive' && message.interactive.type === 'button_reply') {
         if (message.interactive.button_reply.id === 'show_recommendation') {
-          if (user) {
-            // Si presiona el botón, buscamos su recomendación y se la enviamos.
+          // Volvemos a buscar la recomendación para asegurarnos de que la tenemos
+          if (userRecommendation) {
             const messagePayload = {
               messaging_product: "whatsapp",
               to: from,
               type: "text",
-              text: { body: user.recommendation }
+              text: { body: userRecommendation.recommendation }
             };
             await sendWhatsAppMessage(messagePayload);
           }
@@ -159,7 +171,7 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-// --- FUNCIÓN DE ENVÍO DE MENSAJES ---
+// --- FUNCIÓN DE ENVÍO DE MENSAJES (sin cambios) ---
 async function sendWhatsAppMessage(messagePayload) {
   const to = messagePayload.to;
   try {
@@ -174,7 +186,7 @@ async function sendWhatsAppMessage(messagePayload) {
   }
 }
 
-// --- ARRANQUE DEL SERVIDOR ---
+// --- ARRANQUE DEL SERVIDOR (sin cambios) ---
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Servidor escuchando en el puerto ${PORT}`);
