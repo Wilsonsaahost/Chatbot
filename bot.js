@@ -121,21 +121,20 @@ app.post('/webhook', async (req, res) => {
             if (user) replyText = `📄 *Aquí tienes tu última recomendación para ${user.business_name}:*\n\n${user.recommendation}`;
             break;
           case 'generate_recommendation':
-            // --- TEXTO MEJORADO ---
             replyText = "¡Excelente! Para crear tu recomendación personalizada, solo tienes que hacer clic en el siguiente enlace y llenar un breve formulario en nuestro sitio web seguro: 👇\n\nhttps://www.hostaddrees.com/#IA";
             break;
           case 'contact_sales':
             replyText = "🤝 Para hablar con un asesor comercial, por favor abre la tarjeta de contacto que te he enviado.";
             contactPayload = {
               messaging_product: "whatsapp", to: from, type: "contacts",
-              contacts: [{ name: { formatted_name: "Ventas Hostaddrees", first_name: "Ventas", last_name: "Hostaddrees" }, phones: [{ phone: "+573223063648", type: "WORK" }] }]
+              contacts: [{ name: { formatted_name: "Ventas Hostaddrees", first_name: "Ventas", last_name: "Hostaddrees" }, phones: [{ phone: "573223063648", type: "WORK" }] }] // <-- NÚMERO CORREGIDO
             };
             break;
           case 'contact_support':
             replyText = "⚙️ Para recibir soporte técnico, por favor abre la tarjeta de contacto que te he enviado.";
             contactPayload = {
               messaging_product: "whatsapp", to: from, type: "contacts",
-              contacts: [{ name: { formatted_name: "Soporte Hostaddrees", first_name: "Soporte", last_name: "Hostaddrees" }, phones: [{ phone: "+573223063648", type: "WORK" }] }]
+              contacts: [{ name: { formatted_name: "Soporte Hostaddrees", first_name: "Soporte", last_name: "Hostaddrees" }, phones: [{ phone: "573223063648", type: "WORK" }] }] // <-- NÚMERO CORREGIDO
             };
             break;
           case 'show_main_menu':
