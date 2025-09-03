@@ -86,7 +86,9 @@ app.post('/webhook', async (req, res) => {
   
   if (body.object && body.entry?.[0]?.changes?.[0]?.value?.messages?.[0]) {
     const message = body.entry[0].changes?.[0]?.value?.messages?.[0];
+    const contact = body.entry[0].changes[0].value.contacts[0];
     const from = message.from;
+    const userName = contact.profile.name; // <-- OBTENEMOS EL NOMBRE DE WHATSAPP
     const normalizedFrom = normalizePhoneNumber(from);
 
     try {
@@ -95,29 +97,32 @@ app.post('/webhook', async (req, res) => {
         { sort: { createdAt: -1 } }
       );
 
-      // --- LÓGICA DE MENSAJES CON FORMATO Y EMOJIS ---
-
       // CASO 1: El usuario envía CUALQUIER mensaje de texto
       if (message.type === 'text') {
-        // Primero, enviamos el saludo general
+        // Primero, enviamos el saludo general y personalizado con su nombre.
         const welcomePayload = {
           messaging_product: "whatsapp",
           to: from,
-          text: { body: `👋 ¡Hola! Soy tu *AsesorIA* y te doy la bienvenida a *Hostaddrees*.` }
+          text: { body: `👋 ¡Hola, ${userName}! Soy tu *AsesorIA* y te doy la bienvenida a *Hostaddrees*.` }
         };
         await sendWhatsAppMessage(welcomePayload);
 
         // Preparamos las opciones comunes del menú
         const commonRows = [
-          { id: "contact_sales", title: "🤝 Contactar con Ventas" },
-          { id: "contact_support", title: "⚙️ Contactar con Soporte" }
+          { id: "contact_sales", title: "🤝 Hablar con Ventas" },
+          { id: "contact_support", title: "⚙️ Pedir Soporte" }
         ];
 
         let firstRow;
+        let menuBodyText;
+
         if (user) {
-          firstRow = { id: "show_recommendation", title: "📄 Ver mi última recomendación" };
+          firstRow = { id: "show_recommendation", title: "📄 Ver recomendación" };
+          // Personalizamos el cuerpo del menú con el nombre de la empresa
+          menuBodyText = `Veo que tienes una recomendación para *${user.business_name}*.\n\nPor favor, selecciona una opción:`;
         } else {
-          firstRow = { id: "generate_recommendation", title: "💡 Generar una recomendación" };
+          firstRow = { id: "generate_recommendation", title: "💡 Crear recomendación" };
+          menuBodyText = "Por favor, selecciona una de las siguientes opciones:";
         }
 
         // Construimos el menú interactivo
@@ -128,7 +133,7 @@ app.post('/webhook', async (req, res) => {
           interactive: {
             type: "list",
             header: { type: "text", text: "Menú Principal" },
-            body: { text: "Por favor, selecciona una de las siguientes opciones:" },
+            body: { text: menuBodyText },
             footer: { text: "✨ Hostaddrees AsesorIA" },
             action: {
               button: "Ver Opciones ⚙️",
@@ -150,7 +155,7 @@ app.post('/webhook', async (req, res) => {
         let replyText = '';
 
         if (selectedId === 'show_recommendation' && user) {
-          replyText = `📄 *Aquí tienes tu última recomendación:*\n\n${user.recommendation}`;
+          replyText = `📄 *Aquí tienes tu última recomendación para ${user.business_name}:*\n\n${user.recommendation}`;
         } else if (selectedId === 'generate_recommendation') {
           replyText = "¡Claro! 💡 Genera tu recomendación personalizada en el siguiente enlace:\nwww.hostaddrees.com/#IA";
         } else if (selectedId === 'contact_sales') {
