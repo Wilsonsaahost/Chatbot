@@ -113,6 +113,7 @@ app.post('/webhook', async (req, res) => {
         const selectedId = message.interactive.list_reply?.id || message.interactive.button_reply?.id;
         
         let replyText = '';
+        let contactPayload = null;
         let showFollowUp = true;
 
         switch (selectedId) {
@@ -120,15 +121,22 @@ app.post('/webhook', async (req, res) => {
             if (user) replyText = `📄 *Aquí tienes tu última recomendación para ${user.business_name}:*\n\n${user.recommendation}`;
             break;
           case 'generate_recommendation':
-            replyText = "¡Claro! 💡 Genera tu recomendación personalizada en el siguiente enlace:\nwww.hostaddrees.com/#IA";
+            // --- TEXTO MEJORADO ---
+            replyText = "¡Excelente! Para crear tu recomendación personalizada, solo tienes que hacer clic en el siguiente enlace y llenar un breve formulario en nuestro sitio web seguro: 👇\n\nhttps://www.hostaddrees.com/#IA";
             break;
           case 'contact_sales':
-            // --- TEXTO MEJORADO ---
-            replyText = `🤝 *Contactar con Ventas*\n\nPara hablar con un asesor comercial, haz clic en el siguiente enlace:\nhttps://api.whatsapp.com/send/?phone=573223063648&text=Hola+Ventas+&type=phone_number&app_absent=0`;
+            replyText = "🤝 Para hablar con un asesor comercial, por favor abre la tarjeta de contacto que te he enviado.";
+            contactPayload = {
+              messaging_product: "whatsapp", to: from, type: "contacts",
+              contacts: [{ name: { formatted_name: "Ventas Hostaddrees", first_name: "Ventas", last_name: "Hostaddrees" }, phones: [{ phone: "+573223063648", type: "WORK" }] }]
+            };
             break;
           case 'contact_support':
-            // --- TEXTO MEJORADO ---
-            replyText = `⚙️ *Contactar con Soporte*\n\nPara recibir soporte técnico, haz clic en el siguiente enlace:\nhttps://api.whatsapp.com/send/?phone=573223063648&text=Hola+Soporte+&type=phone_number&app_absent=0`;
+            replyText = "⚙️ Para recibir soporte técnico, por favor abre la tarjeta de contacto que te he enviado.";
+            contactPayload = {
+              messaging_product: "whatsapp", to: from, type: "contacts",
+              contacts: [{ name: { formatted_name: "Soporte Hostaddrees", first_name: "Soporte", last_name: "Hostaddrees" }, phones: [{ phone: "+573223063648", type: "WORK" }] }]
+            };
             break;
           case 'show_main_menu':
             await sendMainMenu(from, user);
@@ -146,6 +154,9 @@ app.post('/webhook', async (req, res) => {
         if (replyText) {
           messagePayload = { messaging_product: "whatsapp", to: from, text: { body: replyText } };
           await sendWhatsAppMessage(messagePayload);
+        }
+        if (contactPayload) {
+          await sendWhatsAppMessage(contactPayload);
         }
         if (showFollowUp) {
           await sendFollowUpMenu(from);
