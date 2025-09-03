@@ -24,6 +24,9 @@ MongoClient.connect(DATABASE_URL)
   })
   .catch(error => console.error('🔴 Error al conectar a la base de datos:', error));
 
+// --- GESTIÓN DE TIMEOUTS DE CONVERSACIÓN ---
+const userTimeouts = new Map();
+
 // --- FUNCIÓN DE NORMALIZACIÓN DE NÚMEROS ---
 function normalizePhoneNumber(phoneNumber) {
   const digitsOnly = phoneNumber.replace(/\D/g, '');
@@ -34,6 +37,7 @@ function normalizePhoneNumber(phoneNumber) {
 }
 
 // --- RUTAS DEL SERVIDOR ---
+// (Las rutas '/', '/webhook' GET, y '/save-recommendation' se mantienen sin cambios)
 
 // 1. Ruta principal para UptimeRobot
 app.get('/', (req, res) => {
@@ -80,6 +84,7 @@ app.post('/save-recommendation', async (req, res) => {
     }
 });
 
+
 // 4. Ruta principal para recibir los mensajes de WhatsApp
 app.post('/webhook', async (req, res) => {
   const body = req.body;
@@ -88,89 +93,77 @@ app.post('/webhook', async (req, res) => {
     const message = body.entry[0].changes?.[0]?.value?.messages?.[0];
     const contact = body.entry[0].changes[0].value.contacts[0];
     const from = message.from;
-    const userName = contact.profile.name; // <-- OBTENEMOS EL NOMBRE DE WHATSAPP
+    const userName = contact.profile.name;
     const normalizedFrom = normalizePhoneNumber(from);
 
+    // Reiniciamos el temporizador de inactividad con cada mensaje
+    if (userTimeouts.has(from)) {
+      clearTimeout(userTimeouts.get(from));
+    }
+    const timeout = setTimeout(() => {
+      const timeoutPayload = {
+        messaging_product: "whatsapp", to: from, text: { body: "👋 Ha pasado un tiempo. Si necesitas algo más, no dudes en escribir de nuevo. ¡Estoy aquí para ayudar!" }
+      };
+      sendWhatsAppMessage(timeoutPayload);
+      userTimeouts.delete(from);
+    }, 60000); // 60 segundos
+    userTimeouts.set(from, timeout);
+
     try {
-      const user = await db.collection('users').findOne(
-        { whatsapp_number: normalizedFrom },
-        { sort: { createdAt: -1 } }
-      );
+      const user = await db.collection('users').findOne({ whatsapp_number: normalizedFrom }, { sort: { createdAt: -1 } });
+      let messagePayload;
 
-      // CASO 1: El usuario envía CUALQUIER mensaje de texto
+      // ---- INICIO DE LA LÓGICA PRINCIPAL ----
+
+      // CASO 1: El usuario envía CUALQUIER mensaje de texto por primera vez en la sesión
       if (message.type === 'text') {
-        // Primero, enviamos el saludo general y personalizado con su nombre.
-        const welcomePayload = {
-          messaging_product: "whatsapp",
-          to: from,
-          text: { body: `👋 ¡Hola, ${userName}! Soy tu *AsesorIA* y te doy la bienvenida a *Hostaddrees*.` }
+        // Enviamos el saludo general y personalizado
+        messagePayload = {
+          messaging_product: "whatsapp", to: from, text: { body: `👋 ¡Hola, ${userName}! Soy tu *AsesorIA* y te doy la bienvenida a *Hostaddrees*.` }
         };
-        await sendWhatsAppMessage(welcomePayload);
-
-        // Preparamos las opciones comunes del menú
-        const commonRows = [
-          { id: "contact_sales", title: "🤝 Hablar con Ventas" },
-          { id: "contact_support", title: "⚙️ Pedir Soporte" }
-        ];
-
-        let firstRow;
-        let menuBodyText;
-
-        if (user) {
-          firstRow = { id: "show_recommendation", title: "📄 Ver recomendación" };
-          // Personalizamos el cuerpo del menú con el nombre de la empresa
-          menuBodyText = `Veo que tienes una recomendación para *${user.business_name}*.\n\nPor favor, selecciona una opción:`;
-        } else {
-          firstRow = { id: "generate_recommendation", title: "💡 Crear recomendación" };
-          menuBodyText = "Por favor, selecciona una de las siguientes opciones:";
-        }
-
-        // Construimos el menú interactivo
-        const menuPayload = {
-          messaging_product: "whatsapp",
-          to: from,
-          type: "interactive",
-          interactive: {
-            type: "list",
-            header: { type: "text", text: "Menú Principal" },
-            body: { text: menuBodyText },
-            footer: { text: "✨ Hostaddrees AsesorIA" },
-            action: {
-              button: "Ver Opciones ⚙️",
-              sections: [
-                {
-                  title: "ACCIONES",
-                  rows: [firstRow, ...commonRows]
-                }
-              ]
-            }
-          }
-        };
-        await sendWhatsAppMessage(menuPayload);
+        await sendWhatsAppMessage(messagePayload);
+        await sendMainMenu(from, user); // Enviamos el menú principal
       }
 
-      // CASO 2: El usuario selecciona una opción del menú (lista)
-      else if (message.type === 'interactive' && message.interactive.type === 'list_reply') {
-        const selectedId = message.interactive.list_reply.id;
+      // CASO 2: El usuario selecciona una opción del menú
+      else if (message.type === 'interactive') {
+        const selectedId = message.interactive.list_reply?.id || message.interactive.button_reply?.id;
+        
         let replyText = '';
+        let showFollowUp = true; // Variable para decidir si mostramos el menú de seguimiento
 
-        if (selectedId === 'show_recommendation' && user) {
-          replyText = `📄 *Aquí tienes tu última recomendación para ${user.business_name}:*\n\n${user.recommendation}`;
-        } else if (selectedId === 'generate_recommendation') {
-          replyText = "¡Claro! 💡 Genera tu recomendación personalizada en el siguiente enlace:\nwww.hostaddrees.com/#IA";
-        } else if (selectedId === 'contact_sales') {
-          replyText = "Para hablar con nuestro equipo de ventas, por favor usa este enlace: 🤝\nhttps://api.whatsapp.com/send/?phone=573223063648&text=Hola+Ventas+&type=phone_number&app_absent=0";
-        } else if (selectedId === 'contact_support') {
-          replyText = "Para recibir soporte técnico, por favor usa este enlace: ⚙️\nhttps://api.whatsapp.com/send/?phone=573223063648&text=Hola+Soporte+&type=phone_number&app_absent=0";
+        switch (selectedId) {
+          case 'show_recommendation':
+            if (user) replyText = `📄 *Aquí tienes tu última recomendación para ${user.business_name}:*\n\n${user.recommendation}`;
+            break;
+          case 'generate_recommendation':
+            replyText = "¡Claro! 💡 Genera tu recomendación personalizada en el siguiente enlace:\nwww.hostaddrees.com/#IA";
+            break;
+          case 'contact_sales':
+            replyText = "Para hablar con nuestro equipo de ventas, por favor usa este enlace: 🤝\nhttps://api.whatsapp.com/send/?phone=573223063648&text=Hola+Ventas+&type=phone_number&app_absent=0";
+            break;
+          case 'contact_support':
+            replyText = "Para recibir soporte técnico, por favor usa este enlace: ⚙️\nhttps://api.whatsapp.com/send/?phone=573223063648&text=Hola+Soporte+&type=phone_number&app_absent=0";
+            break;
+          case 'show_main_menu':
+            await sendMainMenu(from, user);
+            showFollowUp = false; // Ya mostramos el menú, no necesitamos seguimiento
+            break;
+          case 'end_chat':
+            replyText = "✅ ¡Entendido! Ha sido un placer ayudarte. Si necesitas algo más, solo tienes que escribir. ¡Que tengas un excelente día!";
+            clearTimeout(userTimeouts.get(from)); // Cancelamos el timeout
+            userTimeouts.delete(from);
+            showFollowUp = false; // La conversación ha terminado
+            break;
         }
 
         if (replyText) {
-          const replyPayload = {
-            messaging_product: "whatsapp",
-            to: from,
-            text: { body: replyText }
-          };
-          await sendWhatsAppMessage(replyPayload);
+          messagePayload = { messaging_product: "whatsapp", to: from, text: { body: replyText } };
+          await sendWhatsAppMessage(messagePayload);
+        }
+
+        if (showFollowUp) {
+          await sendFollowUpMenu(from);
         }
       }
       
@@ -184,7 +177,59 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-// --- FUNCIÓN DE ENVÍO DE MENSAJES (sin cambios) ---
+
+// --- FUNCIONES DE MENÚS ---
+
+async function sendMainMenu(to, user) {
+  const commonRows = [
+    { id: "contact_sales", title: "🤝 Contactar con Ventas" },
+    { id: "contact_support", title: "⚙️ Contactar con Soporte" }
+  ];
+  let firstRow;
+  let menuBodyText;
+
+  if (user) {
+    firstRow = { id: "show_recommendation", title: "📄 Ver recomendación" };
+    menuBodyText = `Veo que tienes una recomendación para *${user.business_name}*.\n\nPor favor, selecciona una opción:`;
+  } else {
+    firstRow = { id: "generate_recommendation", title: "💡 Crear recomendación" };
+    menuBodyText = "Por favor, selecciona una de las siguientes opciones:";
+  }
+  
+  const menuPayload = {
+    messaging_product: "whatsapp", to: to, type: "interactive",
+    interactive: {
+      type: "list",
+      header: { type: "text", text: "Menú Principal" },
+      body: { text: menuBodyText },
+      footer: { text: "✨ Hostaddrees AsesorIA" },
+      action: {
+        button: "Ver Opciones ⚙️",
+        sections: [{ title: "ACCIONES", rows: [firstRow, ...commonRows] }]
+      }
+    }
+  };
+  await sendWhatsAppMessage(menuPayload);
+}
+
+async function sendFollowUpMenu(to) {
+  const followUpPayload = {
+    messaging_product: "whatsapp", to: to, type: "interactive",
+    interactive: {
+      type: "button",
+      body: { text: "¿Puedo ayudarte en algo más?" },
+      action: {
+        buttons: [
+          { type: "reply", reply: { id: "show_main_menu", title: "Sí, ver menú" } },
+          { type: "reply", reply: { id: "end_chat", title: "No, gracias" } }
+        ]
+      }
+    }
+  };
+  await sendWhatsAppMessage(followUpPayload);
+}
+
+// --- FUNCIÓN DE ENVÍO DE MENSAJES ---
 async function sendWhatsAppMessage(messagePayload) {
   const to = messagePayload.to;
   try {
@@ -199,7 +244,7 @@ async function sendWhatsAppMessage(messagePayload) {
   }
 }
 
-// --- ARRANQUE DEL SERVIDOR (sin cambios) ---
+// --- ARRANQUE DEL SERVIDOR ---
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Servidor escuchando en el puerto ${PORT}`);
