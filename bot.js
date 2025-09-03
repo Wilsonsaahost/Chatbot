@@ -69,7 +69,7 @@ app.post('/save-recommendation', async (req, res) => {
             whatsapp_number: normalizePhoneNumber(whatsapp_number),
             business_name,
             recommendation,
-            createdAt: new Date() // Aseguramos que se guarde la fecha y hora actual
+            createdAt: new Date()
         };
         await collection.insertOne(document);
         console.log(`✅ Recomendación guardada para ${business_name}`);
@@ -85,72 +85,88 @@ app.post('/webhook', async (req, res) => {
   const body = req.body;
   
   if (body.object && body.entry?.[0]?.changes?.[0]?.value?.messages?.[0]) {
-    const message = body.entry[0].changes[0].value.messages[0];
+    const message = body.entry[0].changes?.[0]?.value?.messages?.[0];
     const from = message.from;
     const normalizedFrom = normalizePhoneNumber(from);
 
     try {
-      // --- LÓGICA DE BÚSQUEDA CORREGIDA Y MÁS ROBUSTA ---
-      const cursor = db.collection('users').find({ whatsapp_number: normalizedFrom }).sort({ createdAt: -1 }).limit(1);
-      const latestRecommendation = await cursor.next();
+      const user = await db.collection('users').findOne(
+        { whatsapp_number: normalizedFrom },
+        { sort: { createdAt: -1 } }
+      );
 
-      // Log de depuración para ver qué registro se encontró
-      if (latestRecommendation) {
-        console.log(`ℹ️ Registro encontrado para ${normalizedFrom} con fecha: ${latestRecommendation.createdAt}`);
-      }
+      // --- LÓGICA DE MENSAJES CON FORMATO Y EMOJIS ---
 
-      // CASO 1: El usuario envía un mensaje de texto "hola"
-      if (message.type === 'text' && message.text.body.toLowerCase() === 'hola') {
-        if (latestRecommendation) {
-          const messagePayload = {
-            messaging_product: "whatsapp",
-            to: from,
-            type: "interactive",
-            interactive: {
-              type: "button",
-              body: { text: `¡Hola ${latestRecommendation.business_name}! Bienvenido de nuevo a Hostaddres.` },
-              action: {
-                buttons: [{
-                  type: "reply",
-                  reply: { id: "show_recommendation", title: "Ver recomendación" }
-                }]
-              }
-            }
-          };
-          await sendWhatsAppMessage(messagePayload);
-        } else {
-          const messagePayload = {
-            messaging_product: "whatsapp",
-            to: from,
-            type: "text",
-            text: { body: "Bienvenido a Hostaddres, ¿en qué puedo ayudarte? Si generas una recomendación en nuestro sitio, podrás verla aquí." }
-          };
-          await sendWhatsAppMessage(messagePayload);
-        }
-      }
-      // CASO 2: El usuario presiona un botón
-      else if (message.type === 'interactive' && message.interactive.type === 'button_reply') {
-        if (message.interactive.button_reply.id === 'show_recommendation') {
-          if (latestRecommendation) {
-            const messagePayload = {
-              messaging_product: "whatsapp",
-              to: from,
-              type: "text",
-              text: { body: latestRecommendation.recommendation }
-            };
-            await sendWhatsAppMessage(messagePayload);
-          }
-        }
-      }
-      // CASO 3: El usuario escribe algo diferente a "hola"
-      else if (message.type === 'text') {
-        const messagePayload = {
+      // CASO 1: El usuario envía CUALQUIER mensaje de texto
+      if (message.type === 'text') {
+        // Primero, enviamos el saludo general
+        const welcomePayload = {
           messaging_product: "whatsapp",
           to: from,
-          type: "text",
-          text: { body: 'Para comenzar, por favor escribe "hola".' }
+          text: { body: `👋 ¡Hola! Soy tu *AsesorIA* y te doy la bienvenida a *Hostaddrees*.` }
         };
-        await sendWhatsAppMessage(messagePayload);
+        await sendWhatsAppMessage(welcomePayload);
+
+        // Preparamos las opciones comunes del menú
+        const commonRows = [
+          { id: "contact_sales", title: "🤝 Contactar con Ventas" },
+          { id: "contact_support", title: "⚙️ Contactar con Soporte" }
+        ];
+
+        let firstRow;
+        if (user) {
+          firstRow = { id: "show_recommendation", title: "📄 Ver mi última recomendación" };
+        } else {
+          firstRow = { id: "generate_recommendation", title: "💡 Generar una recomendación" };
+        }
+
+        // Construimos el menú interactivo
+        const menuPayload = {
+          messaging_product: "whatsapp",
+          to: from,
+          type: "interactive",
+          interactive: {
+            type: "list",
+            header: { type: "text", text: "Menú Principal" },
+            body: { text: "Por favor, selecciona una de las siguientes opciones:" },
+            footer: { text: "✨ Hostaddrees AsesorIA" },
+            action: {
+              button: "Ver Opciones ⚙️",
+              sections: [
+                {
+                  title: "ACCIONES",
+                  rows: [firstRow, ...commonRows]
+                }
+              ]
+            }
+          }
+        };
+        await sendWhatsAppMessage(menuPayload);
+      }
+
+      // CASO 2: El usuario selecciona una opción del menú (lista)
+      else if (message.type === 'interactive' && message.interactive.type === 'list_reply') {
+        const selectedId = message.interactive.list_reply.id;
+        let replyText = '';
+
+        if (selectedId === 'show_recommendation' && user) {
+          replyText = `📄 *Aquí tienes tu última recomendación:*\n\n${user.recommendation}`;
+        } else if (selectedId === 'generate_recommendation') {
+          replyText = "¡Claro! 💡 Genera tu recomendación personalizada en el siguiente enlace:\nwww.hostaddrees.com/#IA";
+        } else if (selectedId === 'contact_sales') {
+          replyText = "Para hablar con nuestro equipo de ventas, por favor usa este enlace: 🤝\nhttps://api.whatsapp.com/send/?phone=573223063648&text=Hola+Ventas+&type=phone_number&app_absent=0";
+        } else if (selectedId === 'contact_support') {
+          replyText = "Para recibir soporte técnico, por favor usa este enlace: ⚙️\nhttps://api.whatsapp.com/send/?phone=573223063648&text=Hola+Soporte+&type=phone_number&app_absent=0";
+        }
+
+        if (replyText) {
+          const replyPayload = {
+            messaging_product: "whatsapp",
+            to: from,
+            text: { body: replyText }
+          };
+          await sendWhatsAppMessage(replyPayload);
+        }
       }
       
     } catch (error) {
@@ -163,7 +179,7 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
-// --- FUNCIÓN DE ENVÍO DE MENSAJES ---
+// --- FUNCIÓN DE ENVÍO DE MENSAJES (sin cambios) ---
 async function sendWhatsAppMessage(messagePayload) {
   const to = messagePayload.to;
   try {
@@ -178,7 +194,7 @@ async function sendWhatsAppMessage(messagePayload) {
   }
 }
 
-// --- ARRANQUE DEL SERVIDOR ---
+// --- ARRANQUE DEL SERVIDOR (sin cambios) ---
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Servidor escuchando en el puerto ${PORT}`);
