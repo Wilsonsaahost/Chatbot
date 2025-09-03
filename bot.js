@@ -127,14 +127,14 @@ app.post('/webhook', async (req, res) => {
             replyText = "🤝 Para hablar con un asesor comercial, por favor abre la tarjeta de contacto que te he enviado.";
             contactPayload = {
               messaging_product: "whatsapp", to: from, type: "contacts",
-              contacts: [{ name: { formatted_name: "Ventas Hostaddrees", first_name: "Ventas", last_name: "Hostaddrees" }, phones: [{ phone: "+573223063648", wa_id: "573223063648", type: "WORK" }] }]
+              contacts: [{ name: { formatted_name: "Hostaddrees", first_name: "Hostaddrees", last_name: "Ventas" }, phones: [{ phone: "+573223063648", wa_id: "573223063648", type: "WORK" }] }]
             };
             break;
           case 'contact_support':
             replyText = "⚙️ Para recibir soporte técnico, por favor abre la tarjeta de contacto que te he enviado.";
             contactPayload = {
               messaging_product: "whatsapp", to: from, type: "contacts",
-              contacts: [{ name: { formatted_name: "Soporte Hostaddrees", first_name: "Soporte", last_name: "Hostaddrees" }, phones: [{ phone: "+573223063648", wa_id: "573223063648", type: "WORK" }] }]
+              contacts: [{ name: { formatted_name: "Hostaddrees", first_name: "Hostaddrees", last_name: "Soporte" }, phones: [{ phone: "+573223063648", wa_id: "573223063648", type: "WORK" }] }]
             };
             break;
           case 'show_main_menu':
