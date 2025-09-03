@@ -25,8 +25,8 @@ MongoClient.connect(DATABASE_URL)
   .catch(error => console.error('🔴 Error al conectar a la base de datos:', error));
 
 // --- GESTIÓN DE ESTADO Y TIMEOUTS ---
-const userSessions = new Map(); // Para rastrear conversaciones activas
-const userTimeouts = new Map(); // Para gestionar la inactividad
+const userSessions = new Map();
+const userTimeouts = new Map();
 
 // --- FUNCIÓN DE NORMALIZACIÓN DE NÚMEROS ---
 function normalizePhoneNumber(phoneNumber) {
@@ -39,9 +39,7 @@ function normalizePhoneNumber(phoneNumber) {
 
 // --- RUTAS DEL SERVIDOR ---
 // (Las rutas '/', '/webhook' GET, y '/save-recommendation' se mantienen sin cambios)
-app.get('/', (req, res) => {
-  res.status(200).send('¡El bot de WhatsApp está activo y escuchando!');
-});
+app.get('/', (req, res) => res.status(200).send('¡El bot de WhatsApp está activo y escuchando!'));
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
@@ -81,47 +79,37 @@ app.post('/webhook', async (req, res) => {
     const userName = contact.profile.name;
     const normalizedFrom = normalizePhoneNumber(from);
 
-    // Reiniciamos el temporizador de inactividad con cada mensaje
-    if (userTimeouts.has(from)) {
-      clearTimeout(userTimeouts.get(from));
-    }
+    if (userTimeouts.has(from)) clearTimeout(userTimeouts.get(from));
     const timeout = setTimeout(() => {
       const timeoutPayload = {
-        messaging_product: "whatsapp", to: from, text: { body: "👋 Ha pasado un tiempo. Si necesitas algo más, no dudes en escribir de nuevo. ¡Estoy aquí para ayudar!" }
+        messaging_product: "whatsapp", to: from, text: { body: "👋 Ha pasado un tiempo. Se ha finalizado esta sesión. Si necesitas algo más, solo tienes que escribir de nuevo." }
       };
       sendWhatsAppMessage(timeoutPayload);
       userTimeouts.delete(from);
-      userSessions.delete(from); // Finalizamos la sesión por inactividad
-    }, 60000); // 60 segundos
+      userSessions.delete(from);
+    }, 60000);
     userTimeouts.set(from, timeout);
 
     try {
       const user = await db.collection('users').findOne({ whatsapp_number: normalizedFrom }, { sort: { createdAt: -1 } });
       let messagePayload;
 
-      // ---- INICIO DE LA LÓGICA DE SESIÓN ----
-
-      // CASO 1: El usuario envía un mensaje de texto
       if (message.type === 'text') {
-        // Si NO hay una sesión activa, es el primer saludo.
         if (!userSessions.has(from)) {
-          userSessions.set(from, true); // Marcamos que la sesión ha comenzado
+          userSessions.set(from, true);
           messagePayload = {
             messaging_product: "whatsapp", to: from, text: { body: `👋 ¡Hola, ${userName}! Soy tu *AsesorIA* y te doy la bienvenida a *Hostaddrees*.` }
           };
           await sendWhatsAppMessage(messagePayload);
-          await sendMainMenu(from, user); // Enviamos el menú principal
+          await sendMainMenu(from, user);
         } else {
-          // Si YA hay una sesión activa, le recordamos usar los botones.
           messagePayload = {
             messaging_product: "whatsapp", to: from, text: { body: "Por favor, selecciona una de las opciones del menú para continuar." }
           };
           await sendWhatsAppMessage(messagePayload);
+          await sendMainMenu(from, user);
         }
-      }
-
-      // CASO 2: El usuario selecciona una opción de un menú interactivo
-      else if (message.type === 'interactive') {
+      } else if (message.type === 'interactive') {
         const selectedId = message.interactive.list_reply?.id || message.interactive.button_reply?.id;
         
         let replyText = '';
@@ -135,20 +123,22 @@ app.post('/webhook', async (req, res) => {
             replyText = "¡Claro! 💡 Genera tu recomendación personalizada en el siguiente enlace:\nwww.hostaddrees.com/#IA";
             break;
           case 'contact_sales':
-            replyText = "Para hablar con nuestro equipo de ventas, por favor usa este enlace: 🤝\nhttps://api.whatsapp.com/send/?phone=573223063648&text=Hola+Ventas+&type=phone_number&app_absent=0";
+            // --- TEXTO MEJORADO ---
+            replyText = `🤝 *Contactar con Ventas*\n\nPara hablar con un asesor comercial, haz clic en el siguiente enlace:\nhttps://api.whatsapp.com/send/?phone=573223063648&text=Hola+Ventas+&type=phone_number&app_absent=0`;
             break;
           case 'contact_support':
-            replyText = "Para recibir soporte técnico, por favor usa este enlace: ⚙️\nhttps://api.whatsapp.com/send/?phone=573223063648&text=Hola+Soporte+&type=phone_number&app_absent=0";
+            // --- TEXTO MEJORADO ---
+            replyText = `⚙️ *Contactar con Soporte*\n\nPara recibir soporte técnico, haz clic en el siguiente enlace:\nhttps://api.whatsapp.com/send/?phone=573223063648&text=Hola+Soporte+&type=phone_number&app_absent=0`;
             break;
           case 'show_main_menu':
             await sendMainMenu(from, user);
             showFollowUp = false;
             break;
           case 'end_chat':
-            replyText = "✅ ¡Entendido! Ha sido un placer ayudarte. Si necesitas algo más, solo tienes que escribir. ¡Que tengas un excelente día!";
+            replyText = "✅ ¡Entendido! Ha sido un placer ayudarte. Si necesitas algo más, solo tienes que escribir de nuevo para iniciar otra sesión.";
             clearTimeout(userTimeouts.get(from));
             userTimeouts.delete(from);
-            userSessions.delete(from); // Finalizamos la sesión
+            userSessions.delete(from);
             showFollowUp = false;
             break;
         }
@@ -157,16 +147,13 @@ app.post('/webhook', async (req, res) => {
           messagePayload = { messaging_product: "whatsapp", to: from, text: { body: replyText } };
           await sendWhatsAppMessage(messagePayload);
         }
-
         if (showFollowUp) {
           await sendFollowUpMenu(from);
         }
       }
-      
     } catch (error) {
       console.error('🔴 Error procesando el mensaje:', error);
     }
-
     res.sendStatus(200);
   } else {
     res.sendStatus(404);
@@ -174,12 +161,13 @@ app.post('/webhook', async (req, res) => {
 });
 
 
-// --- FUNCIONES DE MENÚS Y ENVÍO (sin cambios) ---
+// --- FUNCIONES DE MENÚS Y ENVÍO ---
 
 async function sendMainMenu(to, user) {
   const commonRows = [
     { id: "contact_sales", title: "🤝 Contactar con Ventas" },
-    { id: "contact_support", title: "⚙️ Contactar con Soporte" }
+    { id: "contact_support", title: "⚙️ Contactar con Soporte" },
+    { id: "end_chat", title: "🔚 Finalizar Chat" }
   ];
   let firstRow, menuBodyText;
   if (user) {
