@@ -37,22 +37,25 @@ function normalizePhoneNumber(phoneNumber) {
   return digitsOnly;
 }
 
-// --- NUEVA FUNCIÓN: OBTENER O CREAR USUARIO ---
+// --- FUNCIÓN: OBTENER O CREAR USUARIO ---
 async function getOrCreateUser(normalizedPhone, profileName) {
     const users = db.collection('users');
-    let user = await users.findOne({ whatsapp_number: normalizedPhone });
+    let user = await users.findOne(
+        { whatsapp_number: normalizedPhone },
+        { sort: { createdAt: -1 } }
+    );
 
     if (!user) {
         console.log(`[Info] Usuario no encontrado para ${normalizedPhone}. Creando nuevo perfil.`);
         const newUserDoc = {
             whatsapp_number: normalizedPhone,
-            business_name: profileName, // Usamos el nombre de perfil de WhatsApp como inicial
+            business_name: profileName,
             recommendation: null,
             conversationHistory: [],
             createdAt: new Date()
         };
         const result = await users.insertOne(newUserDoc);
-        user = { ...newUserDoc, _id: result.insertedId }; // Devolvemos el usuario recién creado
+        user = { ...newUserDoc, _id: result.insertedId };
     }
     return user;
 }
@@ -77,16 +80,15 @@ app.post('/save-recommendation', async (req, res) => {
     if (!whatsapp_number || !business_name || !recommendation) return res.status(400).send('Faltan datos');
     try {
         const collection = db.collection('users');
-        // Actualizamos el registro si ya existe, o lo creamos si no (upsert)
-        await collection.updateOne(
-            { whatsapp_number: normalizePhoneNumber(whatsapp_number) },
-            { 
-                $set: { business_name, recommendation, createdAt: new Date() },
-                $setOnInsert: { conversationHistory: [] }
-            },
-            { upsert: true }
-        );
-        console.log(`✅ Recomendación guardada/actualizada para ${business_name}`);
+        const document = {
+            whatsapp_number: normalizePhoneNumber(whatsapp_number),
+            business_name,
+            recommendation,
+            conversationHistory: [],
+            createdAt: new Date()
+        };
+        await collection.insertOne(document);
+        console.log(`✅ Nueva recomendación guardada para ${business_name}`);
         res.status(200).send('Recomendación guardada');
     } catch (error) {
         console.error('🔴 Error al guardar la recomendación:', error);
@@ -121,20 +123,32 @@ app.post('/webhook', async (req, res) => {
         messageContent = `[Usuario seleccionó: ${message.interactive.list_reply?.title || message.interactive.button_reply?.title}]`;
       }
       
-      // Ahora siempre tendremos un 'user', por lo que siempre se guardará el historial.
       await db.collection('users').updateOne({ _id: user._id }, {
         $push: { conversationHistory: { sender: 'user', message: messageContent, timestamp: new Date() } }
       });
 
-      // --- Lógica de Respuesta ---
       if (message.type === 'text') {
         if (!userSessions.has(from)) {
           userSessions.set(from, true);
+          
+          // 1. Enviamos el saludo general
           const welcomePayload = {
             messaging_product: "whatsapp", to: from, text: { body: `👋 ¡Hola, ${userName}! Soy tu *AsesorIA* y te doy la bienvenida a *Hostaddrees*.` }
           };
           await sendWhatsAppMessage(welcomePayload, user);
+
+          // 2. Si es un usuario nuevo (sin recomendación), le enviamos el mensaje especial
+          if (!user.recommendation) {
+            const newUserMessage = "Veo que es tu primera vez por aquí y aún no tienes una recomendación. ¡No te preocupes! ✨\n\nPuedes generar una ahora mismo en nuestro sitio web para obtener asesoría personalizada. Solo tienes que hacer clic en el siguiente enlace:\n\n👇\nhttps://www.hostaddrees.com/#IA";
+            const newUserPayload = {
+                messaging_product: "whatsapp", to: from, text: { body: newUserMessage }
+            };
+            await sendWhatsAppMessage(newUserPayload, user);
+          }
+
+          // 3. Enviamos el menú principal
           await sendMainMenu(from, user);
+
         } else {
           const reminderPayload = {
             messaging_product: "whatsapp", to: from, text: { body: "Por favor, selecciona una de las opciones del menú para continuar." }
@@ -156,7 +170,7 @@ app.post('/webhook', async (req, res) => {
                 }
                 break;
             case 'generate_recommendation':
-                replyText = "¡Claro! 💡 Genera tu recomendación personalizada en el siguiente enlace:\nwww.hostaddrees.com/#IA";
+                replyText = "¡Excelente! Para crear tu recomendación personalizada, solo tienes que hacer clic en el siguiente enlace y llenar un breve formulario en nuestro sitio web seguro: 👇\n\nhttps://www.hostaddrees.com/#IA";
                 break;
             case 'contact_sales':
                 replyText = "Para hablar con nuestro equipo de ventas, por favor usa este enlace: 🤝\nhttps://api.whatsapp.com/send/?phone=573223063648&text=Hola+Ventas+&type=phone_number&app_absent=0";
