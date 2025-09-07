@@ -2,7 +2,7 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const axios = require('axios');
-const { MongoClient } = require('mongodb'); // Ya no necesitamos ObjectId aquí
+const { MongoClient } = require('mongodb');
 
 // --- CONFIGURACIÓN SEGURA DESDE RENDER ---
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
@@ -52,7 +52,6 @@ async function getOrCreateUser(normalizedPhone, profileName) {
             createdAt: new Date()
         };
         const result = await users.insertOne(newUserDoc);
-        // Devolvemos el documento completo con su nuevo _id
         user = { ...newUserDoc, _id: result.insertedId };
     }
     return user;
@@ -139,14 +138,41 @@ app.post('/webhook', async (req, res) => {
           await sendMainMenu(from, user);
         }
       } else if (message.type === 'interactive') {
-        // ... La lógica de respuesta a botones se mantiene igual ...
         const selectedId = message.interactive.list_reply?.id || message.interactive.button_reply?.id;
         let replyText = '';
         let showFollowUp = true;
+        
         switch(selectedId) {
-            // ... casos ...
+            case 'show_recommendation':
+                if(user && user.recommendation) replyText = `📄 *Aquí tienes tu última recomendación para ${user.business_name}:*\n\n${user.recommendation}`;
+                else replyText = "No he encontrado una recomendación para ti. Puedes generar una en nuestro sitio web.";
+                break;
+            case 'generate_recommendation':
+                replyText = "¡Claro! 💡 Genera tu recomendación personalizada en el siguiente enlace:\nwww.hostaddrees.com/#IA";
+                break;
+            case 'contact_sales':
+                replyText = "Para hablar con nuestro equipo de ventas, por favor usa este enlace: 🤝\nhttps://api.whatsapp.com/send/?phone=573223063648&text=Hola+Ventas+&type=phone_number&app_absent=0";
+                break;
+            case 'contact_support':
+                replyText = "Para recibir soporte técnico, por favor usa este enlace: ⚙️\nhttps://api.whatsapp.com/send/?phone=573223063648&text=Hola+Soporte+&type=phone_number&app_absent=0";
+                break;
+            case 'show_main_menu':
+                await sendMainMenu(from, user);
+                showFollowUp = false;
+                break;
+            case 'end_chat':
+                await endSession(from, "usuario");
+                showFollowUp = false;
+                break;
         }
-        // ... resto de la lógica ...
+
+        if (replyText) {
+          const replyPayload = { messaging_product: "whatsapp", to: from, text: { body: replyText } };
+          await sendWhatsAppMessage(replyPayload, user);
+        }
+        if (showFollowUp) {
+          await sendFollowUpMenu(to);
+        }
       }
     } catch (error) {
       console.error('🔴 Error procesando el mensaje:', error);
@@ -167,7 +193,9 @@ async function endSession(from, reason) {
     }
     if (farewellMessage) {
         const farewellPayload = { messaging_product: "whatsapp", to: from, text: { body: farewellMessage } };
-        await sendWhatsAppMessage(farewellPayload);
+        const normalizedFrom = normalizePhoneNumber(from);
+        const user = await db.collection('users').findOne({ whatsapp_number: normalizedFrom });
+        await sendWhatsAppMessage(farewellPayload, user);
     }
     console.log(`Finalizando sesión para ${from} por ${reason}.`);
     if (userTimeouts.has(from)) clearTimeout(userTimeouts.get(from));
@@ -213,13 +241,12 @@ async function sendFollowUpMenu(to) {
       }
     }
   };
-  // Buscamos al usuario para poder pasar el objeto user completo
   const normalizedFrom = normalizePhoneNumber(to);
   const user = await db.collection('users').findOne({ whatsapp_number: normalizedFrom });
   await sendWhatsAppMessage(followUpPayload, user);
 }
 
-// --- FUNCIÓN DE ENVÍO DE MENSAJES Y GUARDADO DE HISTORIAL ---
+// --- FUNCIÓN DE ENVÍO DE MENSAJES Y GUARDADO DE HISTORIAL (VERSIÓN DEPURACIÓN) ---
 async function sendWhatsAppMessage(messagePayload, user = null) {
   try {
     await axios.post(
@@ -237,11 +264,17 @@ async function sendWhatsAppMessage(messagePayload, user = null) {
         botMessageContent = `[Bot envió menú: ${messagePayload.interactive.header.text}]`;
       }
       
-      // La corrección clave: usamos user._id que ya es un ObjectId
-      await db.collection('users').updateOne({ _id: user._id }, {
-        $push: { conversationHistory: { sender: 'bot', message: botMessageContent, timestamp: new Date() } }
+      const updateResult = await db.collection('users').updateOne({ _id: user._id }, {
+        $push: { conversationHistory: { sender: 'bot', message: botMessageContent, timestamp: new Date() } },
+        $set: { lastBotInteraction: new Date() } // <-- EL "SELLO" DE ACTUALIZACIÓN
       });
-      console.log(`[Depuración] Mensaje del bot guardado para ${user.whatsapp_number}.`);
+
+      // Log para ver si la actualización fue exitosa
+      if (updateResult.modifiedCount > 0) {
+        console.log(`[Depuración] ¡ÉXITO! Se actualizó el historial para ${user.whatsapp_number}.`);
+      } else {
+        console.log(`[Depuración] AVISO: El comando de actualización se ejecutó pero no modificó el documento para ${user.whatsapp_number}.`);
+      }
     }
   } catch (error) {
     console.error('🔴 Error enviando mensaje o guardando historial:', error.response ? error.response.data.error : error.message);
