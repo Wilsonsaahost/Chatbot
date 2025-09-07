@@ -10,7 +10,6 @@ const VERIFY_TOKEN = process.env.VERIFY_TOKEN;
 const PHONE_NUMBER_ID = process.env.PHONE_NUMBER_ID;
 const DATABASE_URL = process.env.DATABASE_URL;
 const API_SECRET_KEY = process.env.API_SECRET_KEY;
-const NOTIFICATION_EMAIL = process.env.NOTIFICATION_EMAIL;
 
 // --- INICIALIZACIÓN DE LA APLICACIÓN Y LA BASE DE DATOS ---
 const app = express();
@@ -62,7 +61,7 @@ app.post('/save-recommendation', async (req, res) => {
             whatsapp_number: normalizePhoneNumber(whatsapp_number),
             business_name,
             recommendation,
-            conversationHistory: [],
+            conversationHistory: [], // Inicializamos el historial
             createdAt: new Date()
         };
         await collection.insertOne(document);
@@ -85,15 +84,11 @@ app.post('/webhook', async (req, res) => {
     const userName = contact.profile.name;
     const normalizedFrom = normalizePhoneNumber(from);
 
+    // Reiniciamos el temporizador
     if (userTimeouts.has(from)) clearTimeout(userTimeouts.get(from));
-    const timeout = setTimeout(() => {
-      const timeoutPayload = {
-        messaging_product: "whatsapp", to: from, text: { body: "👋 Ha pasado un tiempo. Se ha finalizado esta sesión. Si necesitas algo más, solo tienes que escribir de nuevo." }
-      };
-      sendWhatsAppMessage(timeoutPayload);
-      userTimeouts.delete(from);
-      userSessions.delete(from);
-    }, 60000);
+    const timeout = setTimeout(async () => {
+      await endSession(from, "inactividad");
+    }, 60000); // 60 segundos
     userTimeouts.set(from, timeout);
 
     try {
@@ -112,23 +107,25 @@ app.post('/webhook', async (req, res) => {
         });
       }
 
+      // --- Lógica de Respuesta ---
       if (message.type === 'text') {
         if (!userSessions.has(from)) {
           userSessions.set(from, true);
           const welcomePayload = {
             messaging_product: "whatsapp", to: from, text: { body: `👋 ¡Hola, ${userName}! Soy tu *AsesorIA* y te doy la bienvenida a *Hostaddrees*.` }
           };
-          await sendWhatsAppMessage(welcomePayload);
+          await sendWhatsAppMessage(from, welcomePayload);
           await sendMainMenu(from, user);
         } else {
           const reminderPayload = {
             messaging_product: "whatsapp", to: from, text: { body: "Por favor, selecciona una de las opciones del menú para continuar." }
           };
-          await sendWhatsAppMessage(reminderPayload);
+          await sendWhatsAppMessage(from, reminderPayload);
           await sendMainMenu(from, user);
         }
       } else if (message.type === 'interactive') {
         const selectedId = message.interactive.list_reply?.id || message.interactive.button_reply?.id;
+        
         let replyText = '';
         let showFollowUp = true;
 
@@ -150,16 +147,13 @@ app.post('/webhook', async (req, res) => {
             showFollowUp = false;
             break;
           case 'end_chat':
-            replyText = "✅ ¡Entendido! Ha sido un placer ayudarte. Si necesitas algo más, solo tienes que escribir de nuevo para iniciar otra sesión.";
-            clearTimeout(userTimeouts.get(from));
-            userTimeouts.delete(from);
-            userSessions.delete(from);
+            await endSession(from, "usuario");
             showFollowUp = false;
             break;
         }
         if (replyText) {
           const replyPayload = { messaging_product: "whatsapp", to: from, text: { body: replyText } };
-          await sendWhatsAppMessage(replyPayload);
+          await sendWhatsAppMessage(from, replyPayload);
         }
         if (showFollowUp) {
           await sendFollowUpMenu(from);
@@ -174,9 +168,31 @@ app.post('/webhook', async (req, res) => {
   }
 });
 
+// --- FUNCIÓN PARA FINALIZAR SESIÓN ---
+async function endSession(from, reason) {
+    console.log(`Finalizando sesión para ${from} por ${reason}. El historial se conservará en la DB.`);
+    
+    // Enviamos un mensaje de despedida si el usuario termina el chat
+    if (reason === "usuario") {
+        const farewellPayload = {
+            messaging_product: "whatsapp", to: from, text: { body: "✅ ¡Entendido! Ha sido un placer ayudarte. Si necesitas algo más, solo tienes que escribir de nuevo." }
+        };
+        await sendWhatsAppMessage(from, farewellPayload);
+    }
+
+    // Limpiamos los temporizadores y sesiones
+    if (userTimeouts.has(from)) {
+        clearTimeout(userTimeouts.get(from));
+        userTimeouts.delete(from);
+    }
+    userSessions.delete(from);
+}
+
+
 // --- FUNCIONES DE MENÚS Y ENVÍO ---
 
 async function sendMainMenu(to, user) {
+  // ... (código sin cambios)
   const commonRows = [
     { id: "contact_sales", title: "🤝 Contactar con Ventas" },
     { id: "contact_support", title: "⚙️ Contactar con Soporte" },
@@ -198,10 +214,11 @@ async function sendMainMenu(to, user) {
       action: { button: "Ver Opciones ⚙️", sections: [{ title: "ACCIONES", rows: [firstRow, ...commonRows] }] }
     }
   };
-  await sendWhatsAppMessage(menuPayload);
+  await sendWhatsAppMessage(to, menuPayload);
 }
 
 async function sendFollowUpMenu(to) {
+  // ... (código sin cambios)
   const followUpPayload = {
     messaging_product: "whatsapp", to: to, type: "interactive",
     interactive: {
@@ -214,17 +231,16 @@ async function sendFollowUpMenu(to) {
       }
     }
   };
-  await sendWhatsAppMessage(followUpPayload);
+  await sendWhatsAppMessage(to, followUpPayload);
 }
 
-// --- FUNCIÓN DE ENVÍO DE MENSAJES MODIFICADA Y CORREGIDA ---
-async function sendWhatsAppMessage(messagePayload) {
-  const from = messagePayload.to;
+// --- FUNCIÓN DE ENVÍO DE MENSAJES MODIFICADA ---
+async function sendWhatsAppMessage(from, messagePayload) {
   try {
     await axios.post(
       `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`,
       messagePayload,
-      { headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}`, 'Content-Type': 'application/json' } }
+      { headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}` } }
     );
     console.log(`✅ Mensaje enviado a ${from}`);
 
