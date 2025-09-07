@@ -40,8 +40,6 @@ function normalizePhoneNumber(phoneNumber) {
 // --- FUNCIÓN: OBTENER O CREAR USUARIO ---
 async function getOrCreateUser(normalizedPhone, profileName) {
     const users = db.collection('users');
-    
-    // MODIFICACIÓN: Añadimos el sort para obtener siempre el registro más reciente
     let user = await users.findOne(
         { whatsapp_number: normalizedPhone },
         { sort: { createdAt: -1 } }
@@ -75,6 +73,8 @@ app.get('/webhook', (req, res) => {
     res.sendStatus(403);
   }
 });
+
+// --- RUTA MODIFICADA: SIEMPRE CREA UN NUEVO REGISTRO ---
 app.post('/save-recommendation', async (req, res) => {
     const providedApiKey = req.header('x-api-key');
     if (providedApiKey !== API_SECRET_KEY) return res.status(401).send('Acceso no autorizado');
@@ -82,16 +82,15 @@ app.post('/save-recommendation', async (req, res) => {
     if (!whatsapp_number || !business_name || !recommendation) return res.status(400).send('Faltan datos');
     try {
         const collection = db.collection('users');
-        // Usamos updateOne con upsert para crear o actualizar el registro, evitando duplicados.
-        await collection.updateOne(
-            { whatsapp_number: normalizePhoneNumber(whatsapp_number) },
-            { 
-                $set: { business_name, recommendation, createdAt: new Date() },
-                $setOnInsert: { conversationHistory: [] }
-            },
-            { upsert: true }
-        );
-        console.log(`✅ Recomendación guardada/actualizada para ${business_name}`);
+        const document = {
+            whatsapp_number: normalizePhoneNumber(whatsapp_number),
+            business_name,
+            recommendation,
+            conversationHistory: [], // El historial empieza vacío para cada nueva recomendación
+            createdAt: new Date()
+        };
+        await collection.insertOne(document); // <--- CAMBIO CLAVE: Usamos insertOne
+        console.log(`✅ Nueva recomendación guardada para ${business_name}`);
         res.status(200).send('Recomendación guardada');
     } catch (error) {
         console.error('🔴 Error al guardar la recomendación:', error);
@@ -126,6 +125,7 @@ app.post('/webhook', async (req, res) => {
         messageContent = `[Usuario seleccionó: ${message.interactive.list_reply?.title || message.interactive.button_reply?.title}]`;
       }
       
+      // Guardamos el historial en el registro MÁS RECIENTE del usuario
       await db.collection('users').updateOne({ _id: user._id }, {
         $push: { conversationHistory: { sender: 'user', message: messageContent, timestamp: new Date() } }
       });
