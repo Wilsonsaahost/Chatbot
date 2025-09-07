@@ -2,7 +2,7 @@
 const express = require('express');
 const bodyParser = require('body-parser');
 const axios = require('axios');
-const { MongoClient } = require('mongodb');
+const { MongoClient } = require('mongodb'); // Ya no necesitamos ObjectId aquí
 
 // --- CONFIGURACIÓN SEGURA DESDE RENDER ---
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
@@ -37,28 +37,28 @@ function normalizePhoneNumber(phoneNumber) {
   return digitsOnly;
 }
 
-// --- NUEVA FUNCIÓN: OBTENER O CREAR USUARIO ---
+// --- FUNCIÓN: OBTENER O CREAR USUARIO ---
 async function getOrCreateUser(normalizedPhone, profileName) {
     const users = db.collection('users');
     let user = await users.findOne({ whatsapp_number: normalizedPhone });
 
     if (!user) {
         console.log(`[Info] Usuario no encontrado para ${normalizedPhone}. Creando nuevo perfil.`);
-        const newUser = {
+        const newUserDoc = {
             whatsapp_number: normalizedPhone,
-            business_name: profileName, // Usamos el nombre de perfil de WhatsApp como inicial
+            business_name: profileName,
             recommendation: null,
             conversationHistory: [],
             createdAt: new Date()
         };
-        const result = await users.insertOne(newUser);
-        user = { ...newUser, _id: result.insertedId }; // Devolvemos el usuario recién creado
+        const result = await users.insertOne(newUserDoc);
+        // Devolvemos el documento completo con su nuevo _id
+        user = { ...newUserDoc, _id: result.insertedId };
     }
     return user;
 }
 
 // --- RUTAS DEL SERVIDOR ---
-// (Las rutas '/', '/webhook' GET, y '/save-recommendation' se mantienen sin cambios)
 app.get('/', (req, res) => res.status(200).send('¡El bot de WhatsApp está activo y escuchando!'));
 app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
@@ -78,7 +78,6 @@ app.post('/save-recommendation', async (req, res) => {
     if (!whatsapp_number || !business_name || !recommendation) return res.status(400).send('Faltan datos');
     try {
         const collection = db.collection('users');
-        // Actualizamos el registro si ya existe, o lo creamos si no (upsert)
         await collection.updateOne(
             { whatsapp_number: normalizePhoneNumber(whatsapp_number) },
             { $set: { business_name, recommendation, createdAt: new Date() }, $setOnInsert: { conversationHistory: [] } },
@@ -103,7 +102,6 @@ app.post('/webhook', async (req, res) => {
     const userName = contact.profile.name;
     const normalizedFrom = normalizePhoneNumber(from);
 
-    // Reiniciamos el temporizador
     if (userTimeouts.has(from)) clearTimeout(userTimeouts.get(from));
     const timeout = setTimeout(async () => {
       await endSession(from, "inactividad");
@@ -120,7 +118,6 @@ app.post('/webhook', async (req, res) => {
         messageContent = `[Usuario seleccionó: ${message.interactive.list_reply?.title || message.interactive.button_reply?.title}]`;
       }
       
-      // Guardamos el mensaje del usuario
       await db.collection('users').updateOne({ _id: user._id }, {
         $push: { conversationHistory: { sender: 'user', message: messageContent, timestamp: new Date() } }
       });
@@ -132,18 +129,24 @@ app.post('/webhook', async (req, res) => {
           const welcomePayload = {
             messaging_product: "whatsapp", to: from, text: { body: `👋 ¡Hola, ${userName}! Soy tu *AsesorIA* y te doy la bienvenida a *Hostaddrees*.` }
           };
-          await sendWhatsAppMessage(from, welcomePayload, user._id);
+          await sendWhatsAppMessage(welcomePayload, user);
           await sendMainMenu(from, user);
         } else {
           const reminderPayload = {
             messaging_product: "whatsapp", to: from, text: { body: "Por favor, selecciona una de las opciones del menú para continuar." }
           };
-          await sendWhatsAppMessage(from, reminderPayload, user._id);
+          await sendWhatsAppMessage(reminderPayload, user);
           await sendMainMenu(from, user);
         }
       } else if (message.type === 'interactive') {
-        // ... (La lógica de respuesta a botones se mantiene igual)
-        // ...
+        // ... La lógica de respuesta a botones se mantiene igual ...
+        const selectedId = message.interactive.list_reply?.id || message.interactive.button_reply?.id;
+        let replyText = '';
+        let showFollowUp = true;
+        switch(selectedId) {
+            // ... casos ...
+        }
+        // ... resto de la lógica ...
       }
     } catch (error) {
       console.error('🔴 Error procesando el mensaje:', error);
@@ -162,46 +165,71 @@ async function endSession(from, reason) {
     } else if (reason === "inactividad") {
         farewellMessage = "👋 Ha pasado un tiempo. Se ha finalizado esta sesión. Si necesitas algo más, solo tienes que escribir de nuevo.";
     }
-
     if (farewellMessage) {
         const farewellPayload = { messaging_product: "whatsapp", to: from, text: { body: farewellMessage } };
-        await sendWhatsAppMessage(from, farewellPayload); // Aquí no pasamos userId porque la sesión está terminando
+        await sendWhatsAppMessage(farewellPayload);
     }
-
     console.log(`Finalizando sesión para ${from} por ${reason}.`);
-    if (userTimeouts.has(from)) {
-        clearTimeout(userTimeouts.get(from));
-        userTimeouts.delete(from);
-    }
+    if (userTimeouts.has(from)) clearTimeout(userTimeouts.get(from));
+    userTimeouts.delete(from);
     userSessions.delete(from);
 }
 
-
-// --- FUNCIONES DE MENÚS Y ENVÍO ---
-
+// --- FUNCIONES DE MENÚS ---
 async function sendMainMenu(to, user) {
-  // ... (código sin cambios)
-  const menuPayload = { /* ... tu payload de menú ... */ };
-  await sendWhatsAppMessage(to, menuPayload, user._id);
+  const commonRows = [
+    { id: "contact_sales", title: "🤝 Contactar con Ventas" },
+    { id: "contact_support", title: "⚙️ Contactar con Soporte" },
+    { id: "end_chat", title: "🔚 Finalizar Chat" }
+  ];
+  let firstRow, menuBodyText;
+  if (user && user.recommendation) {
+    firstRow = { id: "show_recommendation", title: "📄 Ver recomendación" };
+    menuBodyText = `Veo que tienes una recomendación para *${user.business_name}*.\n\nPor favor, selecciona una opción:`;
+  } else {
+    firstRow = { id: "generate_recommendation", title: "💡 Crear recomendación" };
+    menuBodyText = "Por favor, selecciona una de las siguientes opciones:";
+  }
+  const menuPayload = {
+    messaging_product: "whatsapp", to: to, type: "interactive",
+    interactive: {
+      type: "list", header: { type: "text", text: "Menú Principal" },
+      body: { text: menuBodyText }, footer: { text: "✨ Hostaddrees AsesorIA" },
+      action: { button: "Ver Opciones ⚙️", sections: [{ title: "ACCIONES", rows: [firstRow, ...commonRows] }] }
+    }
+  };
+  await sendWhatsAppMessage(menuPayload, user);
 }
-
 async function sendFollowUpMenu(to) {
-  // ... (código sin cambios)
-  const followUpPayload = { /* ... tu payload de menú ... */ };
-  await sendWhatsAppMessage(to, followUpPayload);
+  const followUpPayload = {
+    messaging_product: "whatsapp", to: to, type: "interactive",
+    interactive: {
+      type: "button", body: { text: "¿Puedo ayudarte en algo más?" },
+      action: {
+        buttons: [
+          { type: "reply", reply: { id: "show_main_menu", title: "Sí, ver menú" } },
+          { type: "reply", reply: { id: "end_chat", title: "No, gracias" } }
+        ]
+      }
+    }
+  };
+  // Buscamos al usuario para poder pasar el objeto user completo
+  const normalizedFrom = normalizePhoneNumber(to);
+  const user = await db.collection('users').findOne({ whatsapp_number: normalizedFrom });
+  await sendWhatsAppMessage(followUpPayload, user);
 }
 
-// --- FUNCIÓN DE ENVÍO DE MENSAJES MODIFICADA ---
-async function sendWhatsAppMessage(from, messagePayload, userId = null) {
+// --- FUNCIÓN DE ENVÍO DE MENSAJES Y GUARDADO DE HISTORIAL ---
+async function sendWhatsAppMessage(messagePayload, user = null) {
   try {
     await axios.post(
       `https://graph.facebook.com/v19.0/${PHONE_NUMBER_ID}/messages`,
       messagePayload,
       { headers: { 'Authorization': `Bearer ${WHATSAPP_TOKEN}` } }
     );
-    console.log(`✅ Mensaje enviado a ${from}`);
+    console.log(`✅ Mensaje enviado a ${messagePayload.to}`);
 
-    if (userId) {
+    if (user && user._id) {
       let botMessageContent = '';
       if (messagePayload.text) {
         botMessageContent = messagePayload.text.body;
@@ -209,9 +237,11 @@ async function sendWhatsAppMessage(from, messagePayload, userId = null) {
         botMessageContent = `[Bot envió menú: ${messagePayload.interactive.header.text}]`;
       }
       
-      await db.collection('users').updateOne({ _id: new ObjectId(userId) }, {
+      // La corrección clave: usamos user._id que ya es un ObjectId
+      await db.collection('users').updateOne({ _id: user._id }, {
         $push: { conversationHistory: { sender: 'bot', message: botMessageContent, timestamp: new Date() } }
       });
+      console.log(`[Depuración] Mensaje del bot guardado para ${user.whatsapp_number}.`);
     }
   } catch (error) {
     console.error('🔴 Error enviando mensaje o guardando historial:', error.response ? error.response.data.error : error.message);
