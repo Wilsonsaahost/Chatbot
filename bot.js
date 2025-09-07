@@ -40,7 +40,12 @@ function normalizePhoneNumber(phoneNumber) {
 // --- FUNCIÓN: OBTENER O CREAR USUARIO ---
 async function getOrCreateUser(normalizedPhone, profileName) {
     const users = db.collection('users');
-    let user = await users.findOne({ whatsapp_number: normalizedPhone });
+    
+    // MODIFICACIÓN: Añadimos el sort para obtener siempre el registro más reciente
+    let user = await users.findOne(
+        { whatsapp_number: normalizedPhone },
+        { sort: { createdAt: -1 } }
+    );
 
     if (!user) {
         console.log(`[Info] Usuario no encontrado para ${normalizedPhone}. Creando nuevo perfil.`);
@@ -77,9 +82,13 @@ app.post('/save-recommendation', async (req, res) => {
     if (!whatsapp_number || !business_name || !recommendation) return res.status(400).send('Faltan datos');
     try {
         const collection = db.collection('users');
+        // Usamos updateOne con upsert para crear o actualizar el registro, evitando duplicados.
         await collection.updateOne(
             { whatsapp_number: normalizePhoneNumber(whatsapp_number) },
-            { $set: { business_name, recommendation, createdAt: new Date() }, $setOnInsert: { conversationHistory: [] } },
+            { 
+                $set: { business_name, recommendation, createdAt: new Date() },
+                $setOnInsert: { conversationHistory: [] }
+            },
             { upsert: true }
         );
         console.log(`✅ Recomendación guardada/actualizada para ${business_name}`);
@@ -144,8 +153,11 @@ app.post('/webhook', async (req, res) => {
         
         switch(selectedId) {
             case 'show_recommendation':
-                if(user && user.recommendation) replyText = `📄 *Aquí tienes tu última recomendación para ${user.business_name}:*\n\n${user.recommendation}`;
-                else replyText = "No he encontrado una recomendación para ti. Puedes generar una en nuestro sitio web.";
+                if(user && user.recommendation) {
+                    replyText = `📄 *Aquí tienes tu última recomendación para ${user.business_name}:*\n\n${user.recommendation}`;
+                } else {
+                    replyText = "No he encontrado una recomendación para ti. Puedes generar una en nuestro sitio web.";
+                }
                 break;
             case 'generate_recommendation':
                 replyText = "¡Claro! 💡 Genera tu recomendación personalizada en el siguiente enlace:\nwww.hostaddrees.com/#IA";
@@ -246,7 +258,7 @@ async function sendFollowUpMenu(to) {
   await sendWhatsAppMessage(followUpPayload, user);
 }
 
-// --- FUNCIÓN DE ENVÍO DE MENSAJES Y GUARDADO DE HISTORIAL (VERSIÓN DEPURACIÓN) ---
+// --- FUNCIÓN DE ENVÍO DE MENSAJES Y GUARDADO DE HISTORIAL ---
 async function sendWhatsAppMessage(messagePayload, user = null) {
   try {
     await axios.post(
@@ -264,17 +276,10 @@ async function sendWhatsAppMessage(messagePayload, user = null) {
         botMessageContent = `[Bot envió menú: ${messagePayload.interactive.header.text}]`;
       }
       
-      const updateResult = await db.collection('users').updateOne({ _id: user._id }, {
+      await db.collection('users').updateOne({ _id: user._id }, {
         $push: { conversationHistory: { sender: 'bot', message: botMessageContent, timestamp: new Date() } },
-        $set: { lastBotInteraction: new Date() } // <-- EL "SELLO" DE ACTUALIZACIÓN
+        $set: { lastBotInteraction: new Date() }
       });
-
-      // Log para ver si la actualización fue exitosa
-      if (updateResult.modifiedCount > 0) {
-        console.log(`[Depuración] ¡ÉXITO! Se actualizó el historial para ${user.whatsapp_number}.`);
-      } else {
-        console.log(`[Depuración] AVISO: El comando de actualización se ejecutó pero no modificó el documento para ${user.whatsapp_number}.`);
-      }
     }
   } catch (error) {
     console.error('🔴 Error enviando mensaje o guardando historial:', error.response ? error.response.data.error : error.message);
