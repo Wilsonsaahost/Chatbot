@@ -61,7 +61,7 @@ app.post('/save-recommendation', async (req, res) => {
             whatsapp_number: normalizePhoneNumber(whatsapp_number),
             business_name,
             recommendation,
-            conversationHistory: [], // Inicializamos el historial
+            conversationHistory: [],
             createdAt: new Date()
         };
         await collection.insertOne(document);
@@ -84,11 +84,10 @@ app.post('/webhook', async (req, res) => {
     const userName = contact.profile.name;
     const normalizedFrom = normalizePhoneNumber(from);
 
-    // Reiniciamos el temporizador
     if (userTimeouts.has(from)) clearTimeout(userTimeouts.get(from));
     const timeout = setTimeout(async () => {
       await endSession(from, "inactividad");
-    }, 60000); // 60 segundos
+    }, 60000);
     userTimeouts.set(from, timeout);
 
     try {
@@ -101,10 +100,14 @@ app.post('/webhook', async (req, res) => {
         messageContent = `[Usuario seleccionó: ${message.interactive.list_reply?.title || message.interactive.button_reply?.title}]`;
       }
       
+      // Guardamos el mensaje del usuario aquí para asegurar que se registre
       if(user) {
         await db.collection('users').updateOne({ _id: user._id }, {
           $push: { conversationHistory: { sender: 'user', message: messageContent, timestamp: new Date() } }
         });
+        console.log(`[Depuración] Mensaje de usuario guardado para ${normalizedFrom}.`);
+      } else {
+        console.log(`[Depuración] No se encontró usuario para ${normalizedFrom}, no se guardó su mensaje.`);
       }
 
       // --- Lógica de Respuesta ---
@@ -170,9 +173,8 @@ app.post('/webhook', async (req, res) => {
 
 // --- FUNCIÓN PARA FINALIZAR SESIÓN ---
 async function endSession(from, reason) {
-    console.log(`Finalizando sesión para ${from} por ${reason}. El historial se conservará en la DB.`);
+    console.log(`Finalizando sesión para ${from} por ${reason}.`);
     
-    // Enviamos un mensaje de despedida si el usuario termina el chat
     if (reason === "usuario") {
         const farewellPayload = {
             messaging_product: "whatsapp", to: from, text: { body: "✅ ¡Entendido! Ha sido un placer ayudarte. Si necesitas algo más, solo tienes que escribir de nuevo." }
@@ -180,7 +182,6 @@ async function endSession(from, reason) {
         await sendWhatsAppMessage(from, farewellPayload);
     }
 
-    // Limpiamos los temporizadores y sesiones
     if (userTimeouts.has(from)) {
         clearTimeout(userTimeouts.get(from));
         userTimeouts.delete(from);
@@ -192,7 +193,6 @@ async function endSession(from, reason) {
 // --- FUNCIONES DE MENÚS Y ENVÍO ---
 
 async function sendMainMenu(to, user) {
-  // ... (código sin cambios)
   const commonRows = [
     { id: "contact_sales", title: "🤝 Contactar con Ventas" },
     { id: "contact_support", title: "⚙️ Contactar con Soporte" },
@@ -218,7 +218,6 @@ async function sendMainMenu(to, user) {
 }
 
 async function sendFollowUpMenu(to) {
-  // ... (código sin cambios)
   const followUpPayload = {
     messaging_product: "whatsapp", to: to, type: "interactive",
     interactive: {
@@ -246,7 +245,9 @@ async function sendWhatsAppMessage(from, messagePayload) {
 
     const normalizedFrom = normalizePhoneNumber(from);
     const user = await db.collection('users').findOne({ whatsapp_number: normalizedFrom }, { sort: { createdAt: -1 } });
+    
     if (user) {
+      console.log(`[Depuración] Usuario encontrado para guardar historial del bot.`);
       let botMessageContent = '';
       if (messagePayload.text) {
         botMessageContent = messagePayload.text.body;
@@ -257,6 +258,9 @@ async function sendWhatsAppMessage(from, messagePayload) {
       await db.collection('users').updateOne({ _id: user._id }, {
         $push: { conversationHistory: { sender: 'bot', message: botMessageContent, timestamp: new Date() } }
       });
+      console.log(`[Depuración] Mensaje del bot guardado para ${normalizedFrom}.`);
+    } else {
+      console.log(`[Depuración] No se encontró usuario para ${normalizedFrom}, no se guardó el mensaje del bot.`);
     }
   } catch (error) {
     console.error('🔴 Error enviando mensaje o guardando historial:', error.response ? error.response.data.error : error.message);
