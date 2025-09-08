@@ -130,25 +130,11 @@ app.post('/webhook', async (req, res) => {
       if (message.type === 'text') {
         if (!userSessions.has(from)) {
           userSessions.set(from, true);
-          
-          // 1. Enviamos el saludo general
           const welcomePayload = {
             messaging_product: "whatsapp", to: from, text: { body: `👋 ¡Hola, ${userName}! Soy tu *AsesorIA* y te doy la bienvenida a *Hostaddrees*.` }
           };
           await sendWhatsAppMessage(welcomePayload, user);
-
-          // 2. Si es un usuario nuevo (sin recomendación), le enviamos el mensaje especial
-          if (!user.recommendation) {
-            const newUserMessage = "Veo que es tu primera vez por aquí y aún no tienes una recomendación. ¡No te preocupes! ✨\n\nPuedes generar una ahora mismo en nuestro sitio web para obtener asesoría personalizada. Solo tienes que hacer clic en el siguiente enlace:\n\n👇\nhttps://www.hostaddrees.com/#IA";
-            const newUserPayload = {
-                messaging_product: "whatsapp", to: from, text: { body: newUserMessage }
-            };
-            await sendWhatsAppMessage(newUserPayload, user);
-          }
-
-          // 3. Enviamos el menú principal
           await sendMainMenu(from, user);
-
         } else {
           const reminderPayload = {
             messaging_product: "whatsapp", to: from, text: { body: "Por favor, selecciona una de las opciones del menú para continuar." }
@@ -158,42 +144,52 @@ app.post('/webhook', async (req, res) => {
         }
       } else if (message.type === 'interactive') {
         const selectedId = message.interactive.list_reply?.id || message.interactive.button_reply?.id;
-        let replyText = '';
-        let showFollowUp = true;
         
-        switch(selectedId) {
-            case 'show_recommendation':
-                if(user && user.recommendation) {
-                    replyText = `📄 *Aquí tienes tu última recomendación para ${user.business_name}:*\n\n${user.recommendation}`;
-                } else {
-                    replyText = "Aún no tienes una recomendación. ¡Genera una en nuestro sitio web!";
-                }
-                break;
-            case 'generate_recommendation':
-                replyText = "¡Excelente! Para crear tu recomendación personalizada, solo tienes que hacer clic en el siguiente enlace y llenar un breve formulario en nuestro sitio web seguro: 👇\n\nhttps://www.hostaddrees.com/#IA";
-                break;
-            case 'contact_sales':
-                replyText = "Para hablar con nuestro equipo de ventas, por favor usa este enlace: 🤝\nhttps://api.whatsapp.com/send/?phone=573223063648&text=Hola+Ventas+&type=phone_number&app_absent=0";
-                break;
-            case 'contact_support':
-                replyText = "Para recibir soporte técnico, por favor usa este enlace: ⚙️\nhttps://api.whatsapp.com/send/?phone=573223063648&text=Hola+Soporte+&type=phone_number&app_absent=0";
-                break;
-            case 'show_main_menu':
-                await sendMainMenu(from, user);
-                showFollowUp = false;
-                break;
-            case 'end_chat':
-                await endSession(from, "usuario");
-                showFollowUp = false;
-                break;
+        let replyText = '';
+        let contactPayload = null;
+        let showFollowUp = true;
+
+        switch (selectedId) {
+          case 'show_recommendation':
+            if(user && user.recommendation) replyText = `📄 *Aquí tienes tu última recomendación para ${user.business_name}:*\n\n${user.recommendation}`;
+            else replyText = "Aún no tienes una recomendación. ¡Genera una en nuestro sitio web!";
+            break;
+          case 'generate_recommendation':
+            replyText = "¡Excelente! Para crear tu recomendación personalizada, solo tienes que hacer clic en el siguiente enlace y llenar un breve formulario en nuestro sitio web seguro: 👇\n\nhttps://www.hostaddrees.com/#IA";
+            break;
+          case 'contact_sales':
+            replyText = "🤝 Para hablar con un asesor comercial, por favor abre la tarjeta de contacto que te he enviado.";
+            contactPayload = {
+              messaging_product: "whatsapp", to: from, type: "contacts",
+              contacts: [{ name: { formatted_name: "Ventas Hostaddrees", first_name: "Ventas", last_name: "Hostaddrees" }, phones: [{ phone: "+573223063648", wa_id: "573223063648", type: "WORK" }] }]
+            };
+            break;
+          case 'contact_support':
+            replyText = "⚙️ Para recibir soporte técnico, por favor abre la tarjeta de contacto que te he enviado.";
+            contactPayload = {
+              messaging_product: "whatsapp", to: from, type: "contacts",
+              contacts: [{ name: { formatted_name: "Soporte Hostaddrees", first_name: "Soporte", last_name: "Hostaddrees" }, phones: [{ phone: "+573223063648", wa_id: "573223063648", type: "WORK" }] }]
+            };
+            break;
+          case 'show_main_menu':
+            await sendMainMenu(from, user);
+            showFollowUp = false;
+            break;
+          case 'end_chat':
+            await endSession(from, "usuario");
+            showFollowUp = false;
+            break;
         }
 
         if (replyText) {
           const replyPayload = { messaging_product: "whatsapp", to: from, text: { body: replyText } };
           await sendWhatsAppMessage(replyPayload, user);
         }
+        if (contactPayload) {
+          await sendWhatsAppMessage(contactPayload, user);
+        }
         if (showFollowUp) {
-          await sendFollowUpMenu(to);
+          await sendFollowUpMenu(to, user);
         }
       }
     } catch (error) {
@@ -250,7 +246,8 @@ async function sendMainMenu(to, user) {
   };
   await sendWhatsAppMessage(menuPayload, user);
 }
-async function sendFollowUpMenu(to) {
+
+async function sendFollowUpMenu(to, user) {
   const followUpPayload = {
     messaging_product: "whatsapp", to: to, type: "interactive",
     interactive: {
@@ -263,8 +260,6 @@ async function sendFollowUpMenu(to) {
       }
     }
   };
-  const normalizedFrom = normalizePhoneNumber(to);
-  const user = await db.collection('users').findOne({ whatsapp_number: normalizedFrom });
   await sendWhatsAppMessage(followUpPayload, user);
 }
 
@@ -283,12 +278,11 @@ async function sendWhatsAppMessage(messagePayload, user = null) {
       if (messagePayload.text) {
         botMessageContent = messagePayload.text.body;
       } else if (messagePayload.type === 'interactive') {
-        botMessageContent = `[Bot envió menú: ${messagePayload.interactive.header.text}]`;
+        botMessageContent = `[Bot envió menú: ${messagePayload.interactive.header?.text || messagePayload.interactive.body?.text}]`;
       }
       
       await db.collection('users').updateOne({ _id: user._id }, {
-        $push: { conversationHistory: { sender: 'bot', message: botMessageContent, timestamp: new Date() } },
-        $set: { lastBotInteraction: new Date() }
+        $push: { conversationHistory: { sender: 'bot', message: botMessageContent, timestamp: new Date() } }
       });
     }
   } catch (error) {
