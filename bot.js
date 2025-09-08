@@ -1,4 +1,4 @@
-console.log("--- Cargando bot.js v2 (VERSIÓN CORREGIDA) ---");
+console.log("--- Cargando bot.js v3 (VERSIÓN FINAL) ---");
 
 // --- LIBRERÍAS NECESARIAS ---
 const express = require('express');
@@ -64,7 +64,6 @@ async function getOrCreateUser(normalizedPhone, profileName) {
 
 // --- RUTAS DEL SERVIDOR ---
 app.get('/', (req, res) => res.status(200).send('¡El bot de WhatsApp está activo y escuchando!'));
-
 app.get('/webhook', (req, res) => {
     const mode = req.query['hub.mode'];
     const token = req.query['hub.verify_token'];
@@ -76,7 +75,6 @@ app.get('/webhook', (req, res) => {
         res.sendStatus(403);
     }
 });
-
 app.post('/save-recommendation', async (req, res) => {
     const providedApiKey = req.header('x-api-key');
     if (providedApiKey !== API_SECRET_KEY) return res.status(401).send('Acceso no autorizado');
@@ -100,7 +98,7 @@ app.post('/save-recommendation', async (req, res) => {
     }
 });
 
-// Ruta principal para recibir los mensajes de WhatsApp
+// 4. Ruta principal para recibir los mensajes de WhatsApp
 app.post('/webhook', async (req, res) => {
     const body = req.body;
 
@@ -193,7 +191,7 @@ app.post('/webhook', async (req, res) => {
                     await sendWhatsAppMessage(contactPayload, user);
                 }
                 if (showFollowUp) {
-                    await sendFollowUpMenu(to, user);
+                    await sendFollowUpMenu(from); // <--- CORRECCIÓN: Se pasa solo 'from'
                 }
             }
         } catch (error) {
@@ -251,7 +249,7 @@ async function sendMainMenu(to, user) {
     await sendWhatsAppMessage(menuPayload, user);
 }
 
-async function sendFollowUpMenu(to, user) {
+async function sendFollowUpMenu(to) { // <--- CORRECCIÓN: Solo necesita 'to'
     const followUpPayload = {
         messaging_product: "whatsapp", to: to, type: "interactive",
         interactive: {
@@ -264,6 +262,9 @@ async function sendFollowUpMenu(to, user) {
             }
         }
     };
+    // Se busca al usuario dentro de esta función, ya que no se necesita para guardar historial
+    const normalizedFrom = normalizePhoneNumber(to);
+    const user = await db.collection('users').findOne({ whatsapp_number: normalizedFrom });
     await sendWhatsAppMessage(followUpPayload, user);
 }
 
